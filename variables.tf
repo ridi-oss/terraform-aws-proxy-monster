@@ -30,7 +30,7 @@ variable "bootstrap_client_host_pattern" {
   type        = string
   description = <<-EOT
     MySQL host pattern for the bootstrapped account, covering the proxy task subnets
-    (e.g. "10.25.%"). Ignored for PostgreSQL. Required once target_credential_groups is set.
+    (e.g. "10.0.%"). Required once a target_credential_groups entry is MySQL; PostgreSQL ignores it.
   EOT
   default     = null
 
@@ -40,8 +40,8 @@ variable "bootstrap_client_host_pattern" {
   }
 
   validation {
-    condition     = length(var.target_credential_groups) == 0 || var.bootstrap_client_host_pattern != null
-    error_message = "bootstrap_client_host_pattern is required when target_credential_groups is set."
+    condition     = !anytrue([for g in var.target_credential_groups : g.engine == "mysql"]) || var.bootstrap_client_host_pattern != null
+    error_message = "bootstrap_client_host_pattern is required when a target_credential_groups entry is MySQL."
   }
 }
 
