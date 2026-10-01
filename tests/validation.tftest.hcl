@@ -211,4 +211,92 @@ run "unknown_database_privilege_is_rejected" {
   }
   expect_failures = [var.target_credential_groups]
 }
+run "athena_datasource_has_no_target_secret" {
+  command = plan
+  variables {
+    datasources = {
+      dw = {
+        engine    = "athena"
+        wire_port = 40002
+        athena    = { workgroup = "primary", database = "logs", result_prefix = "results-bucket/athena/", data_prefixes = ["data-bucket/warehouse/"] }
+      }
+    }
+  }
+  assert {
+    condition     = !contains(keys(aws_secretsmanager_secret.target_credentials), "dw")
+    error_message = "An athena datasource must get no target-credentials secret."
+  }
+  assert {
+    condition = alltrue([
+      contains(module.ecs.services["proxy-dw"].container_definitions["proxy"].container_definition.environment, { name = "PM_ATHENA_WORKGROUP", value = "primary" }),
+      contains(module.ecs.services["proxy-dw"].container_definitions["proxy"].container_definition.environment, { name = "PM_TARGET_DB", value = "logs" }),
+    ])
+    error_message = "An athena proxy must receive its workgroup and database."
+  }
+}
 
+run "athena_bucket_without_slash_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      dw = {
+        engine    = "athena"
+        wire_port = 40002
+        athena    = { workgroup = "primary", database = "logs", result_prefix = "results-bucket", data_prefixes = ["data-bucket/warehouse/"] }
+      }
+    }
+  }
+  expect_failures = [var.datasources]
+}
+
+run "athena_wildcard_prefix_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      dw = {
+        engine    = "athena"
+        wire_port = 40002
+        athena    = { workgroup = "primary", database = "logs", result_prefix = "results-bucket/athena/", data_prefixes = ["data-bucket/*/"] }
+      }
+    }
+  }
+  expect_failures = [var.datasources]
+}
+
+run "athena_without_data_prefixes_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      dw = {
+        engine    = "athena"
+        wire_port = 40002
+        athena    = { workgroup = "primary", database = "logs", result_prefix = "results-bucket/athena/", data_prefixes = [] }
+      }
+    }
+  }
+  expect_failures = [var.datasources]
+}
+
+run "athena_other_catalog_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      dw = {
+        engine    = "athena"
+        wire_port = 40002
+        athena    = { workgroup = "primary", database = "logs", catalog = "federated", result_prefix = "results-bucket/athena/", data_prefixes = ["data-bucket/warehouse/"] }
+      }
+    }
+  }
+  expect_failures = [var.datasources]
+}
+
+run "description_with_tab_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, description = "orders\tdb", target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+  }
+  expect_failures = [var.datasources]
+}
