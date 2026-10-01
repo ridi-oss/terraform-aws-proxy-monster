@@ -63,6 +63,29 @@ variable "console_extra_ingress_cidrs" {
   default     = {}
 }
 
+variable "instance" {
+  type = object({
+    name        = optional(string)
+    description = optional(string, "")
+  })
+  description = <<-EOT
+    How this deployment introduces itself to users and MCP agents. name is the MCP install name
+    (pmon-<name>): lowercase letters, digits and inner hyphens, at most 40; null derives it from the
+    console hostname's first label. description is one line, at most 500 characters.
+  EOT
+  default     = {}
+
+  validation {
+    condition     = var.instance.name == null || can(regex("^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$", var.instance.name))
+    error_message = "instance.name must be 1-40 lowercase letters, digits and inner hyphens."
+  }
+
+  validation {
+    condition     = length(var.instance.description) <= 500 && !can(regex("\\p{Cc}", var.instance.description))
+    error_message = "instance.description must be one line of at most 500 characters."
+  }
+}
+
 variable "console_hostname" {
   type        = string
   description = "Public FQDN of the web console (ALB host); its immediate-parent wildcard ACM cert must exist (e.g. pm.dev.example.com -> *.dev.example.com). The DNS record is the caller's: point it at console_alb_dns_name."
@@ -95,20 +118,70 @@ variable "datasources" {
   type = map(object({
     engine                   = string
     wire_port                = number
-    target                   = object({ host = string, port = number, db = string })
+    target                   = optional(object({ host = string, port = number, db = string }))
     tags                     = optional(string, "")
+    description              = optional(string, "")
     extra_security_group_ids = optional(list(string), [])
     credential_group         = optional(string)
+    athena = optional(object({
+      workgroup = string
+      database  = string
+      catalog   = optional(string, "AwsDataCatalog")
+      # S3 prefixes ("bucket/key/", or "bucket/" for a whole bucket) the proxy's task role may use: the
+      # workgroup's query-result location read-write, and every table location the datasource serves
+      # read-only. Athena reads table data as the caller, so these bound what the datasource can see
+      # regardless of policy.
+      result_prefix = string
+      data_prefixes = list(string)
+    }))
   }))
   description = <<-EOT
     Wire proxies, one ECS service + NLB listener per datasource; key = PM_DATASOURCE_NAME.
-    credential_group names a target_credential_groups entry: the bootstrap function then fills and
-    seals this datasource's secret; left null it stays a hand-filled shell.
+    A mysql/postgres datasource dials target with a credentials secret; credential_group names a
+    target_credential_groups entry and the bootstrap function then fills and seals that secret, left
+    null it stays a hand-filled shell. An athena datasource has no target and no secret: the proxy's
+    task role calls Athena in this account on the athena block's workgroup, catalog and database.
+    description is one line, at most 500 characters, shown to MCP agents.
   EOT
 
   validation {
-    condition     = alltrue([for ds in var.datasources : contains(["mysql", "postgres"], ds.engine)])
-    error_message = "datasources[*].engine must be \"mysql\" or \"postgres\"."
+    condition     = alltrue([for ds in var.datasources : length(ds.description) <= 500 && !can(regex("\\p{Cc}", ds.description))])
+    error_message = "datasources[*].description must be one line of at most 500 characters."
+  }
+
+  validation {
+    condition     = alltrue([for ds in var.datasources : contains(["mysql", "postgres", "athena"], ds.engine)])
+    error_message = "datasources[*].engine must be \"mysql\", \"postgres\" or \"athena\"."
+  }
+
+  validation {
+    condition = alltrue([
+      for ds in var.datasources :
+      ds.engine == "athena" ? (ds.athena != null && ds.target == null && ds.credential_group == null) : (ds.athena == null && ds.target != null)
+    ])
+    error_message = "An athena datasource sets athena and neither target nor credential_group; a mysql/postgres datasource sets target and not athena."
+  }
+
+  # The prefixes become IAM resource ARNs with "*" appended: "bucket" alone would also match
+  # "bucket-other", and a "*" inside would widen the grant.
+  validation {
+    condition = alltrue([
+      for ds in var.datasources : alltrue([
+        for prefix in concat([ds.athena.result_prefix], ds.athena.data_prefixes) :
+        can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/([^*?]+/)?$", prefix))
+      ]) && length(ds.athena.data_prefixes) > 0
+      if ds.athena != null
+    ])
+    error_message = "athena.result_prefix and each athena.data_prefixes entry must be \"bucket/\" or \"bucket/key/\" with no wildcards, and data_prefixes must not be empty."
+  }
+
+  validation {
+    condition = alltrue([
+      for ds in var.datasources :
+      can(regex("^[A-Za-z0-9._-]{1,128}$", ds.athena.workgroup)) && ds.athena.catalog == "AwsDataCatalog"
+      if ds.athena != null
+    ])
+    error_message = "athena.workgroup must be an Athena workgroup name, and athena.catalog must be AwsDataCatalog: the task role reaches only this account's Glue catalog."
   }
 
   validation {
@@ -135,7 +208,7 @@ variable "datasources" {
       for ds in var.datasources :
       ds.target.host == var.target_credential_groups[ds.credential_group].external_host &&
       ds.target.port == var.target_credential_groups[ds.credential_group].external_port
-      if try(var.target_credential_groups[ds.credential_group].external_host, null) != null
+      if ds.target != null && try(var.target_credential_groups[ds.credential_group].external_host, null) != null
     ])
     error_message = "A datasource on an external credential_group must dial that group's external_host and external_port. The function creates one account on the group's endpoint and publishes it to every datasource in the group, so one pointing elsewhere would be sealed with a credential for a different server."
   }

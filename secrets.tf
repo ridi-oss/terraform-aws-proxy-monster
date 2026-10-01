@@ -110,7 +110,7 @@ resource "aws_secretsmanager_secret" "alert_slack_webhook" {
 
 # Bootstrapped datasources are filled by the function on the CMK; the rest are hand-filled shells.
 resource "aws_secretsmanager_secret" "target_credentials" {
-  for_each = var.datasources
+  for_each = local.sql_datasources
 
   name                    = "${var.name}/target-credentials/${each.key}"
   recovery_window_in_days = var.secret_recovery_window_days

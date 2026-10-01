@@ -6,6 +6,8 @@ locals {
   aws_account_id = data.aws_caller_identity.current.account_id
   aws_region     = data.aws_region.current.region
 
+  sql_datasources = { for key, ds in var.datasources : key => ds if ds.engine != "athena" }
+
   bootstrapped = { for key, ds in var.datasources : key => ds if ds.credential_group != null }
 
   bootstrap_enabled = length(local.bootstrapped) > 0
@@ -35,7 +37,7 @@ locals {
   }
 
   proxy_task_exec_role_arns = {
-    for key, ds in var.datasources :
+    for key, ds in local.sql_datasources :
     key => "arn:aws:iam::${local.aws_account_id}:role/proxy-${key}-task-exec"
   }
 
