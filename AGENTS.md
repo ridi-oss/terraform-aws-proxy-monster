@@ -1,4 +1,4 @@
-# AGENTS.md — proxy-monster-terraform
+# AGENTS.md — terraform-aws-proxy-monster
 
 The AWS Terraform module for [proxy-monster](https://github.com/ridi-oss/proxy-monster).
 Architecture: [docs/architecture.md](docs/architecture.md).

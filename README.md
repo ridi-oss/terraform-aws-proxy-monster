@@ -1,4 +1,4 @@
-# proxy-monster-terraform
+# terraform-aws-proxy-monster
 
 Terraform module that runs [proxy-monster](https://github.com/ridi-oss/proxy-monster)
 on AWS: ECS Fargate services, an internal ALB for the console, an internal NLB
@@ -12,7 +12,8 @@ Architecture, inputs the caller brings, and manual steps: [docs/architecture.md]
 
 ```hcl
 module "proxy_monster" {
-  source = "github.com/ridi-oss/proxy-monster-terraform?ref=v0.1.0"
+  source  = "ridi-oss/proxy-monster/aws"
+  version = "~> 0.1"
 
   vpc_id           = "vpc-..."
   vpc_cidr         = "10.0.0.0/16"
@@ -45,7 +46,8 @@ The reader role for a target in another account:
 
 ```hcl
 module "bootstrap_reader" {
-  source = "github.com/ridi-oss/proxy-monster-terraform//modules/bootstrap-reader?ref=v0.1.0"
+  source  = "ridi-oss/proxy-monster/aws//modules/bootstrap-reader"
+  version = "~> 0.1"
   # ...
 }
 ```
@@ -69,7 +71,7 @@ payload runs `bootstrap/build.sh` at plan time, which needs `bash`, `curl`,
 
 ## Versioning
 
-Tags follow semver. A module release names the proxy-monster server version it
+Tags follow semver (`v0.1.0`); each tag is a Terraform Registry release. A module release names the proxy-monster server version it
 was tested against; image tags stay the caller's choice.
 
 ## License
