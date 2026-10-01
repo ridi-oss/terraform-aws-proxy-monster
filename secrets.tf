@@ -108,6 +108,16 @@ resource "aws_secretsmanager_secret" "alert_slack_webhook" {
   recovery_window_in_days = var.secret_recovery_window_days
 }
 
+# Forgets an earlier placeholder version without destroying the hand-filled value; a no-op for state
+# that never held it.
+removed {
+  from = aws_secretsmanager_secret_version.alert_slack_webhook
+
+  lifecycle {
+    destroy = false
+  }
+}
+
 # Bootstrapped datasources are filled by the function on the CMK; the rest are hand-filled shells.
 resource "aws_secretsmanager_secret" "target_credentials" {
   for_each = var.datasources
