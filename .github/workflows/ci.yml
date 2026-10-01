@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    name: terraform
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "^1.13"
+          terraform_wrapper: false
+
+      - run: terraform fmt -check -recursive
+
+      - name: validate
+        run: |
+          for dir in . modules/bootstrap-reader examples/*; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+  bootstrap:
+    name: bootstrap
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: bootstrap
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: local-bootstrap-test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v7
+
+      # build.sh installs the Lambda payload from requirements.txt, so it must match uv.lock.
+      - name: requirements.txt matches uv.lock
+        run: |
+          uv export --frozen --no-emit-project --no-dev -o requirements.txt
+          git diff --exit-code requirements.txt
+
+      - run: uv run --frozen --group dev ty check
+
+      - run: uv run --frozen python -m unittest -v
+        env:
+          POSTGRES_TEST_PORT: "5432"
