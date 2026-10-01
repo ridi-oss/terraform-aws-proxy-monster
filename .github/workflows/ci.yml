@@ -36,6 +36,9 @@ jobs:
             echo "::endgroup::"
           done
 
+      # Providers are mocked, so this exercises variable validation and plan-time expressions only.
+      - run: terraform test
+
   bootstrap:
     name: bootstrap
     runs-on: ubuntu-latest

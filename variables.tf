@@ -116,9 +116,15 @@ variable "database_subnets" {
 
 variable "datasources" {
   type = map(object({
-    engine                   = string
-    wire_port                = number
-    target                   = optional(object({ host = string, port = number, db = string }))
+    engine    = string
+    wire_port = number
+    target = optional(object({
+      host = string
+      port = number
+      db   = string
+      tls  = optional(string, "disable")
+      ca   = optional(string)
+    }))
     tags                     = optional(string, "")
     description              = optional(string, "")
     extra_security_group_ids = optional(list(string), [])
@@ -142,6 +148,12 @@ variable "datasources" {
     null it stays a hand-filled shell. An athena datasource has no target and no secret: the proxy's
     task role calls Athena in this account on the athena block's workgroup, catalog and database.
     description is one line, at most 500 characters, shown to MCP agents.
+    target.tls is the proxy's TLS toward the target DB (PM_TARGET_TLS): disable, require, verify-ca
+    or verify-full. verify-full checks the certificate against target.host, so that must be the
+    name on the certificate (for RDS, the endpoint). target.ca (PM_TARGET_CA) is a comma list of
+    "system", "rds", or a PEM file path inside the container; with verify-full, unset means
+    system,rds. verify-ca checks only the chain, so it needs a PEM path to a CA that signs nothing
+    but this target, never system or rds.
   EOT
 
   validation {
@@ -182,6 +194,28 @@ variable "datasources" {
       if ds.athena != null
     ])
     error_message = "athena.workgroup must be an Athena workgroup name, and athena.catalog must be AwsDataCatalog: the task role reaches only this account's Glue catalog."
+  }
+
+  validation {
+    condition     = alltrue([for ds in var.datasources : ds.target == null || contains(["disable", "require", "verify-ca", "verify-full"], try(ds.target.tls, ""))])
+    error_message = "datasources[*].target.tls must be disable, require, verify-ca or verify-full."
+  }
+
+  validation {
+    condition     = alltrue([for ds in var.datasources : try(ds.target.ca, null) == null || contains(["verify-ca", "verify-full"], try(ds.target.tls, ""))])
+    error_message = "datasources[*].target.ca is read only with target.tls verify-ca or verify-full; the proxy refuses to start otherwise."
+  }
+
+  validation {
+    condition = alltrue([
+      for ds in var.datasources :
+      try(ds.target.tls, "") != "verify-ca" || (
+        try(ds.target.ca, null) != null && alltrue([
+          for source in split(",", try(ds.target.ca, "")) : !contains(["", "system", "rds"], trimspace(source))
+        ])
+      )
+    ])
+    error_message = "datasources[*].target.tls verify-ca needs target.ca naming PEM files only: the proxy refuses system and rds there, since those CAs sign other servers too."
   }
 
   validation {
