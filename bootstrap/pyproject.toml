@@ -1,0 +1,22 @@
+[project]
+name = "proxy-monster-bootstrap"
+version = "0.0.0"
+description = "Creates the pmproxy account on a target database from its RDS-managed master secret."
+requires-python = ">=3.14"
+
+# Both are pure Python (py3-none-any). The zip is built for linux/arm64 and may be built on
+# darwin/arm64, so a driver with a compiled extension (psycopg[binary]) would fail at invocation
+# rather than at build.
+dependencies = [
+  "pg8000>=1.31,<2",
+  "pymysql>=1.2,<2",
+]
+
+[dependency-groups]
+dev = [
+  "boto3",
+  "ty",
+]
+
+[tool.uv]
+package = false
