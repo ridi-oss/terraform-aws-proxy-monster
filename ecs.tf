@@ -397,6 +397,8 @@ module "ecs" {
                 { name = "PM_TARGET_PORT", value = tostring(ds.target.port) },
                 { name = "PM_TARGET_DB", value = ds.target.db },
               ],
+              ds.engine == "athena" || try(ds.target.tls, "disable") == "disable" ? [] : [{ name = "PM_TARGET_TLS", value = ds.target.tls }],
+              try(ds.target.ca, null) == null ? [] : [{ name = "PM_TARGET_CA", value = ds.target.ca }],
               ds.tags == "" ? [] : [{ name = "PM_DATASOURCE_TAGS", value = ds.tags }],
               ds.description == "" ? [] : [{ name = "PM_DATASOURCE_DESCRIPTION", value = ds.description }],
             )
