@@ -3,7 +3,7 @@ mock_provider "aws" {
     defaults = { cidr_block = "10.0.0.0/20", availability_zone = "us-east-1a" }
   }
   mock_data "aws_iam_policy_document" {
-    defaults = { json = "{}" }
+    defaults = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
   mock_data "aws_region" {
     defaults = { region = "us-east-1", name = "us-east-1" }
@@ -11,13 +11,27 @@ mock_provider "aws" {
   mock_data "aws_acm_certificate" {
     defaults = { arn = "arn:aws:acm:us-east-1:111111111111:certificate/00000000-0000-0000-0000-000000000000" }
   }
+  mock_data "aws_iam_policy" {
+    defaults = { policy = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  mock_data "aws_partition" {
+    defaults = { partition = "aws", dns_suffix = "amazonaws.com" }
+  }
   mock_data "aws_caller_identity" {
     defaults = { account_id = "111111111111" }
   }
 }
 mock_provider "archive" {}
-mock_provider "external" {}
-mock_provider "http" {}
+mock_provider "external" {
+  mock_data "external" {
+    defaults = { result = { payload_dir = "bootstrap" } }
+  }
+}
+mock_provider "http" {
+  mock_data "http" {
+    defaults = { status_code = 200, response_body = "-----BEGIN CERTIFICATE-----" }
+  }
+}
 
 variables {
   vpc_id            = "vpc-0123456789abcdef0"
@@ -101,4 +115,35 @@ run "ca_without_verification_is_rejected" {
     }
   }
   expect_failures = [var.datasources]
+}
+
+run "postgres_group_needs_no_host_pattern" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "postgres", wire_port = 40001, credential_group = "app", target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 5432, db = "app" } }
+    }
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "postgres", database = "app", schemas = ["public"]
+      }
+    }
+  }
+}
+
+run "mysql_group_needs_host_pattern" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, credential_group = "app", target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 3306, db = "app" } }
+    }
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "mysql", database = "app", schemas = ["app"]
+      }
+    }
+  }
+  expect_failures = [var.bootstrap_client_host_pattern]
 }
