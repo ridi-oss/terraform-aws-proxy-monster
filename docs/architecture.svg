@@ -1,0 +1,186 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1320 860" width="1320" height="860" role="img" aria-label="proxy-monster on AWS: clients reach an internal ALB and NLB in your VPC; ECS services decide per statement in the control plane and query the target DB with a credential the bootstrap Lambda provisioned.">
+<style>
+.bg{fill:#fbfaf7}
+.ink{fill:#1f2328}.mute{fill:#57606a}.faint{fill:#8c959f}
+.region{fill:#f2f1ec;stroke:#d0d7de;stroke-width:1}
+.vpc{fill:none;stroke:#8c959f;stroke-width:1.2;stroke-dasharray:6 5}
+.cluster{fill:#ffffff;stroke:#d0d7de;stroke-width:1}
+.mod{fill:#eef1ff;stroke:#4f5bd5;stroke-width:1.4}
+.ext{fill:#ffffff;stroke:#8c959f;stroke-width:1.2;stroke-dasharray:5 4}
+.edge{fill:none;stroke:#57606a;stroke-width:1.4}
+.edge.hot{stroke:#4f5bd5;stroke-width:2}
+.edge.soft{stroke-dasharray:4 4}
+.head{fill:#57606a}.head.hot{fill:#4f5bd5}
+.pill{fill:#fbfaf7}
+.halo{fill:none;stroke:#fbfaf7;stroke-width:7}
+.accent{fill:#4f5bd5}
+text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+.t{font-size:14px;font-weight:600}
+.s{font-size:11.5px}
+.l{font-size:11px}
+.h{font-size:12px;font-weight:600;letter-spacing:.06em}
+.title{font-size:18px;font-weight:650}
+@media (prefers-color-scheme: dark){
+.bg{fill:#0d1117}
+.ink{fill:#e6edf3}.mute{fill:#9da7b3}.faint{fill:#6e7681}
+.region{fill:#151b23;stroke:#30363d}
+.vpc{stroke:#6e7681}
+.cluster{fill:#0d1117;stroke:#30363d}
+.mod{fill:#1c2140;stroke:#8b95f5}
+.ext{fill:#0d1117;stroke:#6e7681}
+.edge{stroke:#9da7b3}.edge.hot{stroke:#8b95f5}
+.head{fill:#9da7b3}.head.hot{fill:#8b95f5}
+.pill{fill:#0d1117}
+.halo{stroke:#0d1117}
+.accent{fill:#8b95f5}
+}
+</style>
+<rect class="bg" x="0" y="0" width="1320" height="860" rx="14"/>
+<text class="title ink" x="32" y="44">proxy-monster on AWS</text>
+<rect class="mod" x="760" y="28" width="22" height="16" rx="4"/>
+<text class="s mute" x="790" y="40">created by this module</text>
+<rect class="ext" x="950" y="28" width="22" height="16" rx="4"/>
+<text class="s mute" x="980" y="40">you provide</text>
+<line class="edge hot" x1="1080" y1="36" x2="1112" y2="36"/>
+<text class="s mute" x="1120" y="40">query path</text>
+<rect class="vpc" x="232" y="76" width="808" height="744" rx="16"/>
+<text class="h faint" x="252" y="100">YOUR VPC · VPC_ID, SUBNETS</text>
+<rect class="cluster" x="470" y="116" width="300" height="548" rx="12"/>
+<text class="h faint" x="488" y="140">ECS FARGATE CLUSTER</text>
+<rect class="region" x="1072" y="404" width="224" height="236" rx="14"/>
+<text class="h faint" x="1090" y="428">TARGET AWS ACCOUNT</text>
+<text class="h faint" x="32" y="100">CLIENTS</text>
+<rect class="ext" x="32" y="116" width="168" height="52" rx="10"/>
+<text class="t ink" x="116.0" y="138.5" text-anchor="middle">DNS · ACM cert</text>
+<text class="s mute" x="116.0" y="156.5" text-anchor="middle">console_hostname</text>
+<rect class="ext" x="32" y="196" width="168" height="64" rx="10"/>
+<text class="t ink" x="116.0" y="224.5" text-anchor="middle">Browser</text>
+<text class="s mute" x="116.0" y="242.5" text-anchor="middle">web console</text>
+<rect class="ext" x="32" y="472" width="168" height="80" rx="10"/>
+<text class="t ink" x="116.0" y="501.0" text-anchor="middle">pmon</text>
+<text class="s mute" x="116.0" y="519.0" text-anchor="middle">psql · mysql · JDBC</text>
+<text class="s mute" x="116.0" y="534.0" text-anchor="middle">saved local password</text>
+<rect class="mod" x="256" y="176" width="180" height="104" rx="10"/>
+<text class="t ink" x="346.0" y="209.5" text-anchor="middle">Console ALB</text>
+<text class="s mute" x="346.0" y="227.5" text-anchor="middle">internal · HTTPS 443</text>
+<text class="s mute" x="346.0" y="242.5" text-anchor="middle">/ → web</text>
+<text class="s mute" x="346.0" y="257.5" text-anchor="middle">/api /auth /mcp → cp</text>
+<rect class="mod" x="256" y="296" width="180" height="252" rx="10"/>
+<text class="t ink" x="346" y="322" text-anchor="middle">Internal NLB</text>
+<text class="s mute" x="346" y="350" text-anchor="middle">:8080 HTTP · :9090 gRPC</text>
+<text class="s mute" x="346" y="365" text-anchor="middle">→ control-plane</text>
+<line class="edge" x1="272" y1="396" x2="420" y2="396" opacity=".35"/>
+<text class="s mute" x="346" y="486" text-anchor="middle">:&lt;wire_port&gt; → proxy</text>
+<text class="s mute" x="346" y="501" text-anchor="middle">one per datasource</text>
+<rect class="mod" x="490" y="156" width="260" height="56" rx="10"/>
+<text class="t ink" x="620.0" y="180.5" text-anchor="middle">web</text>
+<text class="s mute" x="620.0" y="198.5" text-anchor="middle">Next.js console · :41300</text>
+<rect class="mod" x="490" y="236" width="260" height="84" rx="10"/>
+<text class="t ink" x="620.0" y="267.0" text-anchor="middle">control-plane</text>
+<text class="s mute" x="620.0" y="285.0" text-anchor="middle">identity · Cedar · catalog</text>
+<text class="s mute" x="620.0" y="300.0" text-anchor="middle">per-statement Decide</text>
+<rect class="mod" x="502" y="456" width="260" height="80" rx="10" opacity=".55"/>
+<rect class="mod" x="496" y="462" width="260" height="80" rx="10" opacity=".55"/>
+<rect class="mod" x="490" y="468" width="260" height="80" rx="10"/>
+<text class="t ink" x="620.0" y="504.5" text-anchor="middle">proxy-&lt;datasource&gt;</text>
+<text class="s mute" x="620.0" y="522.5" text-anchor="middle">wire protocol · masks results inline</text>
+<rect class="mod" x="490" y="580" width="260" height="64" rx="10"/>
+<text class="t ink" x="620.0" y="608.5" text-anchor="middle">auditmon</text>
+<text class="s mute" x="620.0" y="626.5" text-anchor="middle">verifies hash chain · anomalies</text>
+<rect class="mod" x="490" y="704" width="260" height="72" rx="10"/>
+<text class="t ink" x="620.0" y="729.0" text-anchor="middle">bootstrap Lambda</text>
+<text class="s mute" x="620.0" y="747.0" text-anchor="middle">runs on apply · provisions</text>
+<text class="s mute" x="620.0" y="762.0" text-anchor="middle">the proxy's DB account</text>
+<rect class="mod" x="812" y="236" width="204" height="84" rx="10"/>
+<text class="t ink" x="914.0" y="267.0" text-anchor="middle">Aurora PostgreSQL</text>
+<text class="s mute" x="914.0" y="285.0" text-anchor="middle">Serverless v2</text>
+<text class="s mute" x="914.0" y="300.0" text-anchor="middle">control-plane store</text>
+<rect class="mod" x="812" y="580" width="204" height="64" rx="10"/>
+<text class="t ink" x="914.0" y="608.5" text-anchor="middle">S3 audit bucket</text>
+<text class="s mute" x="914.0" y="626.5" text-anchor="middle">Object Lock · WORM</text>
+<rect class="mod" x="812" y="704" width="204" height="72" rx="10"/>
+<text class="t ink" x="914.0" y="729.0" text-anchor="middle">Secrets Manager · KMS</text>
+<text class="s mute" x="914.0" y="747.0" text-anchor="middle">target-credentials/&lt;ds&gt;</text>
+<text class="s mute" x="914.0" y="762.0" text-anchor="middle">wire-tls · oidc · …</text>
+<rect class="ext" x="1092" y="196" width="184" height="64" rx="10"/>
+<text class="t ink" x="1184.0" y="224.5" text-anchor="middle">OIDC IdP</text>
+<text class="s mute" x="1184.0" y="242.5" text-anchor="middle">group claim → roles</text>
+<rect class="ext" x="1092" y="448" width="184" height="72" rx="10"/>
+<text class="t ink" x="1184.0" y="480.5" text-anchor="middle">RDS MySQL / PG</text>
+<text class="s mute" x="1184.0" y="498.5" text-anchor="middle">managed master secret</text>
+<rect class="mod" x="1092" y="552" width="184" height="68" rx="10"/>
+<text class="t ink" x="1184.0" y="575.0" text-anchor="middle">bootstrap-reader</text>
+<text class="s mute" x="1184.0" y="593.0" text-anchor="middle">IAM role · modules/</text>
+<text class="s mute" x="1184.0" y="608.0" text-anchor="middle">bootstrap-reader</text>
+<rect class="ext" x="1092" y="704" width="150" height="64" rx="10"/>
+<text class="t ink" x="1167.0" y="732.5" text-anchor="middle">SIEM</text>
+<text class="s mute" x="1167.0" y="750.5" text-anchor="middle">your log pipeline</text>
+<path class="edge soft" d="M200,142 L346,142 L346,176"/>
+<polygon class="head" points="346,176 341.5,167.0 350.5,167.0"/>
+<rect class="pill" x="222.25" y="123" width="101.5" height="15" rx="3"/>
+<text class="l mute" x="273" y="134" text-anchor="middle">resolves · cert</text>
+<path class="edge" d="M200,228 L256,228"/>
+<polygon class="head" points="256,228 247.0,232.5 247.0,223.5"/>
+<rect class="pill" x="207.75" y="209" width="40.5" height="15" rx="3"/>
+<text class="l mute" x="228" y="220" text-anchor="middle">HTTPS</text>
+<path class="edge" d="M436,196 L490,196"/>
+<polygon class="head" points="490,196 481.0,200.5 481.0,191.5"/>
+<path class="edge" d="M436,256 L490,256"/>
+<polygon class="head" points="490,256 481.0,260.5 481.0,251.5"/>
+<path class="edge" d="M750,252 L790,252 L790,228 L1092,228"/>
+<polygon class="head" points="1092,228 1083.0,232.5 1083.0,223.5"/>
+<rect class="pill" x="904.5" y="209" width="71.0" height="15" rx="3"/>
+<text class="l mute" x="940" y="220" text-anchor="middle">OIDC login</text>
+<path class="edge" d="M750,278 L812,278"/>
+<polygon class="head" points="812,278 803.0,282.5 803.0,273.5"/>
+<path class="edge soft" d="M116,472 L116,300 L228,300 L228,262 L256,262"/>
+<polygon class="head" points="256,262 247.0,266.5 247.0,257.5"/>
+<rect class="pill" x="71.35" y="369" width="89.3" height="15" rx="3"/>
+<text class="l mute" x="116" y="380" text-anchor="middle">login · token</text>
+<path class="edge hot" d="M200,512 L256,512"/>
+<polygon class="head hot" points="256,512 247.0,516.5 247.0,507.5"/>
+<rect class="pill" x="213.85" y="493" width="28.299999999999997" height="15" rx="3"/>
+<text class="l mute" x="228" y="504" text-anchor="middle">TLS</text>
+<path class="edge hot" d="M436,508 L490,508"/>
+<polygon class="head hot" points="490,508 481.0,512.5 481.0,503.5"/>
+<path class="edge hot" d="M490,488 L450,488 L450,356 L436,356"/>
+<polygon class="head hot" points="436,356 445.0,351.5 445.0,360.5"/>
+<rect class="pill" x="426.7" y="407" width="46.599999999999994" height="15" rx="3"/>
+<text class="l mute" x="450" y="418" text-anchor="middle">Decide</text>
+<rect class="pill" x="429.75" y="421" width="40.5" height="15" rx="3"/>
+<text class="l mute" x="450" y="432" text-anchor="middle">:9090</text>
+<path class="halo" d="M490,206 L462,206 L462,340 L436,340"/>
+<path class="edge" d="M490,206 L462,206 L462,340 L436,340"/>
+<polygon class="head" points="436,340 445.0,335.5 445.0,344.5"/>
+<rect class="pill" x="441.75" y="279" width="40.5" height="15" rx="3"/>
+<text class="l mute" x="462" y="290" text-anchor="middle">:8080</text>
+<path class="edge hot" d="M436,312 L490,312"/>
+<polygon class="head hot" points="490,312 481.0,316.5 481.0,307.5"/>
+<path class="edge hot" d="M750,484 L1092,484"/>
+<polygon class="head hot" points="1092,484 1083.0,488.5 1083.0,479.5"/>
+<rect class="pill" x="824.5" y="465" width="193.0" height="15" rx="3"/>
+<text class="l mute" x="921" y="476" text-anchor="middle">SQL as the provisioned account</text>
+<path class="halo" d="M750,600 L790,600 L790,300 L812,300"/>
+<path class="edge" d="M750,600 L790,600 L790,300 L812,300"/>
+<polygon class="head" points="812,300 803.0,304.5 803.0,295.5"/>
+<rect class="pill" x="751.45" y="385" width="77.1" height="15" rx="3"/>
+<text class="l mute" x="790" y="396" text-anchor="middle">reads chain</text>
+<path class="edge" d="M750,612 L812,612"/>
+<polygon class="head" points="812,612 803.0,616.5 803.0,607.5"/>
+<path class="edge" d="M1016,612 L1050,612 L1050,736 L1092,736"/>
+<polygon class="head" points="1092,736 1083.0,740.5 1083.0,731.5"/>
+<rect class="pill" x="1026.7" y="679" width="46.599999999999994" height="15" rx="3"/>
+<text class="l mute" x="1050" y="690" text-anchor="middle">export</text>
+<path class="edge" d="M750,740 L812,740"/>
+<polygon class="head" points="812,740 803.0,744.5 803.0,735.5"/>
+<rect class="pill" x="760.75" y="721" width="40.5" height="15" rx="3"/>
+<text class="l mute" x="781" y="732" text-anchor="middle">seals</text>
+<path class="edge" d="M620,776 L620,800 L1262,800 L1262,620"/>
+<polygon class="head" points="1262,620 1266.5,629.0 1257.5,629.0"/>
+<rect class="pill" x="858.4" y="781" width="83.19999999999999" height="15" rx="3"/>
+<text class="l mute" x="900" y="792" text-anchor="middle">assumes role</text>
+<path class="edge" d="M1184,552 L1184,520"/>
+<polygon class="head" points="1184,520 1188.5,529.0 1179.5,529.0"/>
+<rect class="pill" x="1097.8" y="529" width="83.19999999999999" height="15" rx="3"/>
+<text class="l mute" x="1176" y="540" text-anchor="end">reads master</text>
+</svg>

@@ -5,33 +5,11 @@ and what stays a manual step.
 
 ## Topology
 
-```
-                 users (browser)                      users (psql / mysql / JDBC via pmon)
-                       |                                            |
-                       | HTTPS 443                                  | TLS, wire_port per datasource
-                       v                                            v
-        +-----------------------------+            +---------------------------------+
-        | console ALB (internal)      |            | internal NLB                    |
-        |  /      -> web :41300       |            |  :8080 control-plane HTTP       |
-        |  /api /auth /oauth /mcp -> cp|            |  :9090 control-plane gRPC       |
-        +-----------------------------+            |  :<wire_port> -> proxy-<ds>     |
-                       |                           +---------------------------------+
-                       v                                  |                |
-   +-------------------------------- ECS Fargate cluster (<name>) -----------------------+
-   |  web            control-plane  <--- gRPC Decide ---  proxy-<ds> (one per datasource) |
-   |                      |                                    |                         |
-   |  auditmon -----------+  (reads audit chain)                | target-DB credential    |
-   +----------------------|------------------------------------|-------------------------+
-                          v                                    v
-             Aurora Serverless v2 PostgreSQL           target DB (MySQL / PostgreSQL)
-             (control-plane store)                     RDS in any account, or external
-                          |
-             auditmon --> S3 audit bucket (Object Lock, WORM) --> SIEM
+![proxy-monster on AWS](architecture.svg)
 
-   bootstrap Lambda (on apply) --assume--> <name>-bootstrap-reader (target account)
-        reads RDS-managed master secret --> creates pmproxy account --> seals
-        <name>/target-credentials/<ds> (KMS: target-credentials key)
-```
+A query goes pmon → NLB → `proxy-<datasource>`, which asks the control plane (back through the NLB on :9090) to
+Decide each statement, then runs it on the target DB as the account the
+bootstrap Lambda provisioned, masking results inline.
 
 Both load balancers are internal. The console and the wire endpoints are reached
 from inside the VPC or over peering / transit / VPN; `console_extra_ingress_cidrs`
