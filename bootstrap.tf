@@ -30,17 +30,18 @@ locals {
           ? null
           : "${var.name}/master-credentials/${group.external_identifier}"
         )
-        engine            = group.engine
-        database          = group.database
-        schemas           = group.schemas
-        privileges        = group.privileges
-        system_schemas    = group.system_schemas
-        system_routines   = group.system_routines
-        drop_tables       = group.drop_tables
-        global_privileges = group.global_privileges
-        username          = group.username
-        postgres_role     = group.postgres_role
-        host_pattern      = var.bootstrap_client_host_pattern
+        engine               = group.engine
+        database             = group.database
+        schemas              = group.schemas
+        privileges           = group.privileges
+        system_schemas       = group.system_schemas
+        system_routines      = group.system_routines
+        drop_tables          = group.drop_tables
+        global_privileges    = group.global_privileges
+        username             = group.username
+        postgres_role        = group.postgres_role
+        postgres_role_create = group.postgres_role_create
+        host_pattern         = var.bootstrap_client_host_pattern
         datasources = {
           for key, ds in local.bootstrapped : key => ds.target.host if ds.credential_group == name
         }
