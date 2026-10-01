@@ -383,6 +383,9 @@ variable "target_credential_groups" {
     global_privileges = optional(list(string), [])
     username          = optional(string, "pmproxy")
     postgres_role     = optional(string)
+
+    postgres_role_create              = optional(bool, false)
+    postgres_role_database_privileges = optional(list(string), [])
   }))
   description = <<-EOT
     Backend DB accounts the bootstrap function provisions, keyed by group name. One group names one
@@ -439,6 +442,16 @@ variable "target_credential_groups" {
     table, sequence and default-privilege policy; schemas and privileges describe expected access,
     not a limit on what the role can grant. Audit the role before provisioning.
 
+    postgres_role_create lets the function create postgres_role itself as NOLOGIN, and each of
+    schemas with that role as owner, when they do not exist. For a database this stack owns
+    outright, so no one has to run the first statements by hand. An existing schema must already
+    be owned by postgres_role; objects other roles created in it keep their owners.
+
+    postgres_role_database_privileges lists what that created role gets ON DATABASE: CONNECT,
+    CREATE, TEMPORARY. CREATE is what a migration needs to install a trusted extension such as
+    btree_gist, and it also lets the role create other schemas. Additive like the other grants:
+    removing an entry revokes nothing. The master must own the database, as the RDS master does.
+
     system_schemas receive SELECT only, independently of the group's application privileges.
     mysql enables SHOW GRANTS FOR other accounts and also exposes authentication tables,
     including password hashes. Grant it only to accounts intended to inspect other accounts.
@@ -480,6 +493,42 @@ variable "target_credential_groups" {
       )
     ])
     error_message = "postgres_role must be a PostgreSQL role identifier distinct from username."
+  }
+
+  validation {
+    condition     = alltrue([for group in var.target_credential_groups : !group.postgres_role_create || group.postgres_role != null])
+    error_message = "postgres_role_create needs postgres_role."
+  }
+
+  validation {
+    condition = alltrue([
+      for group in var.target_credential_groups :
+      length(group.postgres_role_database_privileges) == 0 || group.postgres_role_create
+    ])
+    error_message = "postgres_role_database_privileges needs postgres_role_create: the function grants only on a role it created."
+  }
+
+  validation {
+    condition = alltrue([
+      for group in var.target_credential_groups : alltrue([
+        for privilege in group.postgres_role_database_privileges : contains(["CONNECT", "CREATE", "TEMPORARY"], privilege)
+      ])
+    ])
+    error_message = "postgres_role_database_privileges entries must be CONNECT, CREATE or TEMPORARY: they are interpolated into GRANT."
+  }
+
+  # Names the function creates: PostgreSQL reserves pg_ and truncates past 63 bytes, and a repeated
+  # schema would be created twice.
+  validation {
+    condition = alltrue([
+      for group in var.target_credential_groups :
+      length(distinct(group.schemas)) == length(group.schemas) && alltrue([
+        for name in concat([coalesce(group.postgres_role, "x")], group.schemas) :
+        !startswith(name, "pg_") && length(name) <= 63
+      ])
+      if group.postgres_role_create
+    ])
+    error_message = "With postgres_role_create, schemas must be distinct, and postgres_role and each schema must not start with pg_ and must fit in 63 bytes."
   }
 
   validation {
