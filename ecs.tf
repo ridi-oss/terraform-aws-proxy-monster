@@ -26,6 +26,8 @@ locals {
       # the ALB to get static ENIs.
       { name = "PM_TRUSTED_PROXIES", value = join(",", sort([for s in data.aws_subnet.private : s.cidr_block])) },
     ],
+    var.instance.name == null ? [] : [{ name = "PM_INSTANCE_NAME", value = var.instance.name }],
+    var.instance.description == "" ? [] : [{ name = "PM_INSTANCE_DESCRIPTION", value = var.instance.description }],
     var.oidc == null ? [
       # No IdP yet: run auth-disabled. PM_AUTH_DEBUG alone trips the app's
       # "production-looking" guard (PM_SESSION_SECRET is set), so PM_DEV opts in.
@@ -382,20 +384,30 @@ module "ecs" {
                 { name = "PM_ADVERTISE_ADDR", value = "${module.internal_nlb.dns_name}:${ds.wire_port}" },
                 { name = "PM_TLS_CERT", value = "/tls/tls.crt" },
                 { name = "PM_TLS_KEY", value = "/tls/tls.key" },
-                { name = "PM_TARGET_HOST", value = ds.target.host },
-                { name = "PM_TARGET_PORT", value = tostring(ds.target.port) },
-                { name = "PM_TARGET_DB", value = ds.target.db },
                 { name = "PM_CONTROL_PLANE_GRPC", value = "${module.internal_nlb.dns_name}:9090" },
                 { name = "PM_MCP_RESOURCE", value = "https://${var.console_hostname}/mcp" },
               ],
+              ds.engine == "athena" ? [
+                { name = "AWS_REGION", value = local.aws_region },
+                { name = "PM_TARGET_DB", value = ds.athena.database },
+                { name = "PM_ATHENA_WORKGROUP", value = ds.athena.workgroup },
+                { name = "PM_ATHENA_DEFAULT_CATALOG", value = ds.athena.catalog },
+                ] : [
+                { name = "PM_TARGET_HOST", value = ds.target.host },
+                { name = "PM_TARGET_PORT", value = tostring(ds.target.port) },
+                { name = "PM_TARGET_DB", value = ds.target.db },
+              ],
               ds.tags == "" ? [] : [{ name = "PM_DATASOURCE_TAGS", value = ds.tags }],
+              ds.description == "" ? [] : [{ name = "PM_DATASOURCE_DESCRIPTION", value = ds.description }],
             )
 
-            secrets = [
-              { name = "PM_TARGET_USER", valueFrom = "${aws_secretsmanager_secret.target_credentials[key].arn}:username::" },
-              { name = "PM_TARGET_PASSWORD", valueFrom = "${aws_secretsmanager_secret.target_credentials[key].arn}:password::" },
-              { name = "PM_SECRET_TOKEN", valueFrom = aws_secretsmanager_secret.grpc_token.arn },
-            ]
+            secrets = concat(
+              [{ name = "PM_SECRET_TOKEN", valueFrom = aws_secretsmanager_secret.grpc_token.arn }],
+              ds.engine == "athena" ? [] : [
+                { name = "PM_TARGET_USER", valueFrom = "${aws_secretsmanager_secret.target_credentials[key].arn}:username::" },
+                { name = "PM_TARGET_PASSWORD", valueFrom = "${aws_secretsmanager_secret.target_credentials[key].arn}:password::" },
+              ],
+            )
 
             enable_cloudwatch_logging = true
           }
@@ -403,11 +415,74 @@ module "ecs" {
 
         subnet_ids = var.private_subnets
 
-        task_exec_secret_arns = [
-          aws_secretsmanager_secret.target_credentials[key].arn,
-          aws_secretsmanager_secret.grpc_token.arn,
-          aws_secretsmanager_secret.wire_tls.arn,
-        ]
+        task_exec_secret_arns = concat(
+          [
+            aws_secretsmanager_secret.grpc_token.arn,
+            aws_secretsmanager_secret.wire_tls.arn,
+          ],
+          ds.engine == "athena" ? [] : [aws_secretsmanager_secret.target_credentials[key].arn],
+        )
+
+        # The Athena proxy is itself the Athena client: it queries as this task role, scoped to the
+        # workgroup, the S3 prefixes, and this account's Glue catalog.
+        tasks_iam_role_statements = ds.engine != "athena" ? null : concat([
+          {
+            actions = [
+              "athena:GetWorkGroup",
+              "athena:StartQueryExecution",
+              "athena:GetQueryExecution",
+              "athena:GetQueryResults",
+              "athena:StopQueryExecution",
+              "athena:GetPreparedStatement",
+            ]
+            resources = ["arn:aws:athena:${local.aws_region}:${local.aws_account_id}:workgroup/${ds.athena.workgroup}"]
+          },
+          {
+            actions   = ["athena:GetDataCatalog", "athena:ListDatabases", "athena:GetDatabase", "athena:ListTableMetadata", "athena:GetTableMetadata"]
+            resources = ["arn:aws:athena:${local.aws_region}:${local.aws_account_id}:datacatalog/${ds.athena.catalog}"]
+          },
+          {
+            # Enumerations with no resource type: IAM accepts them only on "*".
+            actions   = ["athena:ListDataCatalogs", "athena:ListWorkGroups"]
+            resources = ["*"]
+          },
+          {
+            actions = ["glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables", "glue:GetPartition", "glue:GetPartitions"]
+            resources = [
+              "arn:aws:glue:${local.aws_region}:${local.aws_account_id}:catalog",
+              "arn:aws:glue:${local.aws_region}:${local.aws_account_id}:database/*",
+              "arn:aws:glue:${local.aws_region}:${local.aws_account_id}:table/*/*",
+            ]
+          },
+          {
+            actions   = ["s3:GetBucketLocation"]
+            resources = distinct([for prefix in concat([ds.athena.result_prefix], ds.athena.data_prefixes) : "arn:aws:s3:::${split("/", prefix)[0]}"])
+          },
+          ],
+          # ListBucket is bucket-scoped, so the key prefixes are the condition; one statement per bucket
+          # keeps one bucket's prefixes from applying to another.
+          [for bucket in distinct([for prefix in concat([ds.athena.result_prefix], ds.athena.data_prefixes) : split("/", prefix)[0]]) : {
+            actions   = ["s3:ListBucket"]
+            resources = ["arn:aws:s3:::${bucket}"]
+            condition = [{
+              test     = "StringLike"
+              variable = "s3:prefix"
+              values = [
+                for prefix in concat([ds.athena.result_prefix], ds.athena.data_prefixes) :
+                "${join("/", slice(split("/", prefix), 1, length(split("/", prefix))))}*" if split("/", prefix)[0] == bucket
+              ]
+            }]
+          }],
+          [
+            {
+              actions   = ["s3:GetObject"]
+              resources = [for prefix in ds.athena.data_prefixes : "arn:aws:s3:::${prefix}*"]
+            },
+            {
+              actions   = ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
+              resources = ["arn:aws:s3:::${ds.athena.result_prefix}*"]
+            },
+        ])
 
         # Deterministic name so policies can carry it as a literal ARN; a reference would cycle.
         task_exec_iam_role_use_name_prefix = false
