@@ -65,6 +65,9 @@ POSTGRES_SEQUENCE_OWNERS_SQL = (
     " WHERE n.nspname = %s AND c.relkind = 'S'"
 )
 
+# Database-level privileges PostgreSQL grants; interpolated into GRANT, so the list is closed.
+POSTGRES_DATABASE_PRIVILEGES = frozenset({"CONNECT", "CREATE", "TEMPORARY"})
+
 # Table privileges that imply the group also needs USAGE on the schema's sequences.
 POSTGRES_SEQUENCE_WRITERS = frozenset({"INSERT", "UPDATE"})
 
@@ -121,6 +124,8 @@ class Group:
     external_ca_strict_extensions: bool = True
     drop_tables: list[str] = field(default_factory=list)
     postgres_role: str | None = None
+    postgres_role_create: bool = False
+    postgres_role_database_privileges: list[str] = field(default_factory=list)
 
     @property
     def external(self) -> bool:
@@ -329,6 +334,15 @@ def _validate(group: Group, password: Secret) -> None:
         or group.postgres_role == group.username
     ):
         raise BootstrapError("postgres_role must name a distinct PostgreSQL role")
+    if group.postgres_role_create and group.postgres_role is None:
+        raise BootstrapError("postgres_role_create needs postgres_role")
+    if group.postgres_role_database_privileges and not group.postgres_role_create:
+        raise BootstrapError("postgres_role_database_privileges needs postgres_role_create")
+    if not set(group.postgres_role_database_privileges) <= POSTGRES_DATABASE_PRIVILEGES:
+        raise BootstrapError(
+            "postgres_role_database_privileges must be among "
+            + ", ".join(sorted(POSTGRES_DATABASE_PRIVILEGES))
+        )
     for name in ("database", "username"):
         if not BARE_IDENTIFIER.match(getattr(group, name)):
             raise BootstrapError(f"group {name} is not a bare identifier")
@@ -847,6 +861,9 @@ def _verify_postgres_inherited_access(cursor: Any, group: Group) -> None:
                 (group.username, privilege, schema),
             )
             count, granted = cursor.fetchone()
+            if not count and group.postgres_role_create:
+                # No tables yet; _create_postgres_owner has already checked the schema's owner.
+                continue
             if not count or not granted:
                 raise BootstrapError(
                     f"inherited role lacks {privilege} on tables in {schema!r}"
@@ -880,6 +897,7 @@ def _provision_postgres_inherited(
     ) as connection:
         cursor = connection.cursor()
         try:
+            created = _create_postgres_owner(cursor, group) if group.postgres_role_create else []
             exists = _check_postgres_inheritance(cursor, group)
             username = _quote_ident(group.username)
             if not exists:
@@ -897,7 +915,62 @@ def _provision_postgres_inherited(
         except BaseException:
             connection.rollback()
             raise
-    return [f"ROLE {group.postgres_role}: INHERIT TRUE, SET TRUE, ADMIN FALSE"]
+    return created + [f"ROLE {group.postgres_role}: INHERIT TRUE, SET TRUE, ADMIN FALSE"]
+
+
+def _create_postgres_owner(cursor: Any, group: Group) -> list[str]:
+    """Create the NOLOGIN owner role and the schemas it owns, when they do not exist yet.
+
+    The creating master gets ADMIN OPTION on the role (PostgreSQL 16+), which is what the
+    membership grant below needs. An existing schema keeps its owner. The role also gets the
+    configured database privileges; GRANT is additive, so dropping one from the list revokes nothing.
+    """
+    if group.postgres_role is None:
+        raise BootstrapError("postgres_role_create needs postgres_role")
+    role = _quote_ident(group.postgres_role)
+    created = []
+    cursor.execute("SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = %s", (group.postgres_role,))
+    if cursor.fetchone() is None:
+        cursor.execute(f"CREATE ROLE {role} NOLOGIN")
+        created.append(f"CREATE ROLE {group.postgres_role}")
+    for privilege in sorted(group.postgres_role_database_privileges):
+        cursor.execute(
+            "SELECT has_database_privilege(%s, current_database(), %s)",
+            (group.postgres_role, privilege),
+        )
+        if not cursor.fetchone()[0]:
+            cursor.execute(f'GRANT {privilege} ON DATABASE "{group.database}" TO {role}')
+            created.append(f"GRANT {privilege} ON DATABASE {group.database} TO {group.postgres_role}")
+    missing = []
+    for schema in group.schemas:
+        cursor.execute(
+            "SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = %s", (schema,)
+        )
+        if cursor.fetchone() is None:
+            missing.append(schema)
+    if missing:
+        # AUTHORIZATION needs SET ROLE on the owner. CREATE ROLE left the master an ADMIN-only
+        # membership, so this GRANT adds a second row (grantor = master) rather than updating it;
+        # the REVOKE names that grantor so only this row goes and the ADMIN row stays. On failure
+        # the caller's rollback drops the grant, and a REVOKE in the aborted transaction would
+        # replace the real error.
+        cursor.execute(f"GRANT {role} TO CURRENT_USER WITH SET TRUE, INHERIT FALSE")
+        for schema in missing:
+            cursor.execute(f"CREATE SCHEMA {_quote_ident(schema)} AUTHORIZATION {role}")
+            created.append(f"CREATE SCHEMA {schema} OWNER {group.postgres_role}")
+        cursor.execute(f"REVOKE {role} FROM CURRENT_USER GRANTED BY CURRENT_USER")
+    for schema in group.schemas:
+        cursor.execute(
+            "SELECT pg_get_userbyid(nspowner) FROM pg_catalog.pg_namespace WHERE nspname = %s",
+            (schema,),
+        )
+        owner = cursor.fetchone()[0]
+        if owner != group.postgres_role:
+            raise BootstrapError(
+                f"schema {schema!r} is owned by {owner!r}, not {group.postgres_role!r};"
+                " the proxy account would get nothing on it"
+            )
+    return created
 
 
 def _quote_ident(name: str) -> str:

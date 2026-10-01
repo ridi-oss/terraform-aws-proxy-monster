@@ -147,3 +147,68 @@ run "mysql_group_needs_host_pattern" {
   }
   expect_failures = [var.bootstrap_client_host_pattern]
 }
+
+run "postgres_role_create_needs_postgres_role" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "postgres", wire_port = 40001, credential_group = "app", target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 5432, db = "app" } }
+    }
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "postgres", database = "app", schemas = ["app"], postgres_role_create = true
+      }
+    }
+  }
+  expect_failures = [var.target_credential_groups]
+}
+
+run "postgres_role_create_rejects_repeated_schema" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "postgres", wire_port = 40001, credential_group = "app", target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 5432, db = "app" } }
+    }
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "postgres", database = "app", schemas = ["app", "app"], postgres_role = "app_owner", postgres_role_create = true
+      }
+    }
+  }
+  expect_failures = [var.target_credential_groups]
+}
+
+run "database_privileges_need_postgres_role_create" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "postgres", wire_port = 40001, credential_group = "app", target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 5432, db = "app" } }
+    }
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "postgres", database = "app", schemas = ["app"], postgres_role = "app_owner", postgres_role_database_privileges = ["CREATE"]
+      }
+    }
+  }
+  expect_failures = [var.target_credential_groups]
+}
+
+run "unknown_database_privilege_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "postgres", wire_port = 40001, credential_group = "app", target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 5432, db = "app" } }
+    }
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "postgres", database = "app", schemas = ["app"], postgres_role = "app_owner", postgres_role_create = true, postgres_role_database_privileges = ["ALL"]
+      }
+    }
+  }
+  expect_failures = [var.target_credential_groups]
+}
+

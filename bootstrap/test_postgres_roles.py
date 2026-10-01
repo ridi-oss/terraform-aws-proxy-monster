@@ -40,6 +40,13 @@ class PostgresRoleValidationTest(unittest.TestCase):
             make_group(postgres_role='app_read"; SELECT 1'),
             make_group(postgres_role="x" * 64),
             make_group(postgres_role=""),
+            make_group(postgres_role=None, postgres_role_create=True),
+            make_group(postgres_role_database_privileges=["CREATE"]),
+            make_group(postgres_role_create=True, postgres_role_database_privileges=["ALL"]),
+            make_group(
+                postgres_role_create=True,
+                postgres_role_database_privileges=["CREATE; DROP DATABASE postgres"],
+            ),
         ):
             with self.subTest(group=group), self.assertRaises(bootstrap.BootstrapError):
                 bootstrap._validate(group, bootstrap.Secret("local-test-password"))
@@ -80,6 +87,8 @@ class PostgresRoleIntegrationTest(unittest.TestCase):
             cursor.execute(
                 "GRANT app_read, app_rw, ungranted_role TO bootstrap_master WITH ADMIN TRUE"
             )
+            # The RDS master owns the database it creates, so CREATE SCHEMA is its to run.
+            cursor.execute("GRANT CREATE ON DATABASE postgres TO bootstrap_master WITH GRANT OPTION")
             cursor.execute("CREATE SCHEMA inherit_test AUTHORIZATION app_owner")
             cursor.execute("SET ROLE app_owner")
             cursor.execute(
@@ -205,6 +214,103 @@ class PostgresRoleIntegrationTest(unittest.TestCase):
                 "INSERT INTO inherit_test.future_table DEFAULT VALUES RETURNING id"
             )
             self.assertGreater(cursor.fetchone()[0], 0)
+
+    def test_created_owner_role_owns_the_schema_and_grants_ddl(self):
+        suffix = uuid.uuid4().hex[:8]
+        group = make_group(
+            postgres_role=f"owner_{suffix}",
+            postgres_role_create=True,
+            postgres_role_database_privileges=["CREATE"],
+            schemas=[f"created_{suffix}"],
+        )
+        grants = self.provision(group)
+        self.assertEqual(
+            grants[:3],
+            [
+                f"CREATE ROLE owner_{suffix}",
+                f"GRANT CREATE ON DATABASE postgres TO owner_{suffix}",
+                f"CREATE SCHEMA created_{suffix} OWNER owner_{suffix}",
+            ],
+        )
+        self.assertEqual(
+            self.query(
+                "SELECT rolcanlogin FROM pg_roles WHERE rolname = %s", (group.postgres_role,)
+            ),
+            [[False]],
+        )
+        with self.connect(group.username) as connection:
+            cursor = connection.cursor()
+            cursor.execute(f"CREATE TABLE created_{suffix}.t (id serial PRIMARY KEY, v text)")
+            cursor.execute(f"INSERT INTO created_{suffix}.t (v) VALUES ('x') RETURNING id")
+            self.assertEqual(cursor.fetchone()[0], 1)
+            cursor.execute(f"ALTER TABLE created_{suffix}.t ADD COLUMN w int")
+            cursor.execute(f"DROP TABLE created_{suffix}.t")
+            # A trusted extension needs CREATE on the database, which the owner role carries.
+            cursor.execute(f"CREATE EXTENSION btree_gist SCHEMA created_{suffix}")
+            cursor.execute("DROP EXTENSION btree_gist")
+            connection.commit()
+        # A second run finds both in place and creates nothing.
+        self.assertEqual(self.provision(group)[:1], [f"ROLE owner_{suffix}: INHERIT TRUE, SET TRUE, ADMIN FALSE"])
+        # The master keeps only the ADMIN membership CREATE ROLE gave it; the SET grant used for
+        # CREATE SCHEMA AUTHORIZATION is gone.
+        self.assertEqual(
+            self.query(
+                "SELECT a.admin_option, a.inherit_option, a.set_option"
+                " FROM pg_auth_members a JOIN pg_roles r ON r.oid = a.roleid"
+                " JOIN pg_roles m ON m.oid = a.member"
+                " WHERE r.rolname = %s AND m.rolname = 'bootstrap_master'",
+                (group.postgres_role,),
+            ),
+            [[True, False, False]],
+        )
+
+    def test_created_owner_role_gets_no_database_privilege_unless_listed(self):
+        suffix = uuid.uuid4().hex[:8]
+        group = make_group(
+            postgres_role=f"bare_{suffix}",
+            postgres_role_create=True,
+            schemas=[f"bare_{suffix}"],
+        )
+        grants = self.provision(group)
+        self.assertFalse(any("ON DATABASE" in grant for grant in grants))
+        self.assertEqual(
+            self.query(
+                "SELECT has_database_privilege(%s, current_database(), 'CREATE')",
+                (group.postgres_role,),
+            ),
+            [[False]],
+        )
+
+    def test_existing_schema_with_another_owner_is_refused(self):
+        suffix = uuid.uuid4().hex[:8]
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            cursor.execute(f"CREATE SCHEMA foreign_{suffix}")
+            connection.commit()
+        group = make_group(
+            postgres_role=f"owner_{suffix}",
+            postgres_role_create=True,
+            schemas=[f"foreign_{suffix}"],
+        )
+        with self.assertRaisesRegex(bootstrap.BootstrapError, "is owned by 'postgres'"):
+            self.provision(group)
+        self.assert_absent(group)
+        self.assertEqual(
+            self.query("SELECT 1 FROM pg_roles WHERE rolname = %s", (group.postgres_role,)), []
+        )
+
+    def test_failed_schema_creation_reports_its_own_error(self):
+        suffix = uuid.uuid4().hex[:8]
+        group = make_group(
+            postgres_role=f"owner_{suffix}",
+            postgres_role_create=True,
+            schemas=[f"denied_{suffix}"],
+        )
+        with self.assertRaisesRegex(Exception, "permission denied for database"):
+            self.provision(group, master="noadmin_master")
+        self.assertEqual(
+            self.query("SELECT 1 FROM pg_roles WHERE rolname = %s", (group.postgres_role,)), []
+        )
 
     def test_missing_createrole_fails_before_creating_a_login(self):
         group = make_group()
