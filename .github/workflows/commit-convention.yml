@@ -1,8 +1,5 @@
 name: commit convention
 
-# release-please derives every version and changelog entry from commit subjects, so a subject it cannot
-# parse drops the change from the release notes and a missed `feat:` or `!` bumps the wrong number.
-#
 # Checks the PR title, which squash-merge uses as the commit subject here
 # (squash_merge_commit_title = COMMIT_OR_PR_TITLE), and every commit the PR adds, since merge and rebase
 # are also enabled and land the individual subjects instead.

@@ -71,8 +71,9 @@ payload runs `bootstrap/build.sh` at plan time, which needs `bash`, `curl`,
 
 ## Versioning
 
-Tags follow semver (`v0.1.0`); each tag is a Terraform Registry release. A module release names the proxy-monster server version it
-was tested against; image tags stay the caller's choice.
+Releases are annotated `vX.Y.Z` tags on `main`, pushed by a repository admin; each tag is a
+Terraform Registry release. Its GitHub release notes name the proxy-monster server version it was
+tested against; image tags stay the caller's choice.
 
 ## License
 
