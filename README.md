@@ -12,8 +12,7 @@ Architecture, inputs the caller brings, and manual steps: [docs/architecture.md]
 
 ```hcl
 module "proxy_monster" {
-  source  = "ridi-oss/proxy-monster/aws"
-  version = "~> 0.1"
+  source = "git::https://github.com/ridi-oss/terraform-aws-proxy-monster.git?ref=v0.1.0"
 
   vpc_id           = "vpc-..."
   vpc_cidr         = "10.0.0.0/16"
@@ -46,8 +45,7 @@ The reader role for a target in another account:
 
 ```hcl
 module "bootstrap_reader" {
-  source  = "ridi-oss/proxy-monster/aws//modules/bootstrap-reader"
-  version = "~> 0.1"
+  source = "git::https://github.com/ridi-oss/terraform-aws-proxy-monster.git//modules/bootstrap-reader?ref=v0.1.0"
   # ...
 }
 ```
@@ -71,8 +69,8 @@ payload runs `bootstrap/build.sh` at plan time, which needs `bash`, `curl`,
 
 ## Versioning
 
-Releases are annotated `vX.Y.Z` tags on `main`, pushed by a repository admin; each tag is a
-Terraform Registry release. Its GitHub release notes name the proxy-monster server version it was
+Releases are annotated `vX.Y.Z` tags on `main`, pushed by a repository admin; callers pin one
+with `?ref=`. Its GitHub release notes name the proxy-monster server version it was
 tested against; image tags stay the caller's choice.
 
 ## License
