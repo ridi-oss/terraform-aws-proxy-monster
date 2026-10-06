@@ -118,7 +118,7 @@ data "archive_file" "bootstrap" {
 
 module "bootstrap" {
   source  = "terraform-aws-modules/lambda/aws"
-  version = "~> 7.17"
+  version = "~> 8.9"
 
   count = local.bootstrap_enabled ? 1 : 0
 
