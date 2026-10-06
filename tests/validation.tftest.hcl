@@ -300,3 +300,126 @@ run "description_with_tab_is_rejected" {
   }
   expect_failures = [var.datasources]
 }
+
+run "tailscale_null_adds_no_host" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+  }
+  assert {
+    condition     = !contains(keys(module.ecs.services), "proxy-monster-tailscale") && output.tailscale_task_role_arn == null
+    error_message = "A null tailscale must add no service and no role."
+  }
+}
+
+run "tailscale_host_advertises_the_service" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+  assert {
+    condition = alltrue([
+      contains(module.ecs.services["proxy-monster-tailscale"].container_definitions["tailscale"].container_definition.environment, { name = "TS_CLIENT_ID", value = "example-client-id" }),
+      contains(module.ecs.services["proxy-monster-tailscale"].container_definitions["tailscale"].container_definition.environment, { name = "TS_EXTRA_ARGS", value = "--advertise-tags=tag:pm-console-host" }),
+      contains(module.ecs.services["proxy-monster-tailscale"].container_definitions["tailscale"].container_definition.environment, { name = "TS_SERVE_CONFIG", value = "/data/ts/serve.json" }),
+    ])
+    error_message = "The tailscale host must authenticate with client_id, advertise its tag, and read the serve config."
+  }
+  assert {
+    condition     = output.tailscale_task_role_arn == "arn:aws:iam::111111111111:role/proxy-monster-tailscale-tasks"
+    error_message = "The role ARN must be known at plan time so a caller can trust it before the role exists."
+  }
+}
+
+run "tailscale_tag_only_image_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale:stable"
+    }
+  }
+  expect_failures = [var.tailscale]
+}
+
+run "tailscale_service_name_must_be_a_dns_label" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:PM_Console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+  expect_failures = [var.tailscale]
+}
+
+run "tailscale_empty_client_id_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = " "
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+  expect_failures = [var.tailscale]
+}
+
+run "tailscale_serve_config_forwards_80_and_443_to_the_alb" {
+  command = plan
+  override_module {
+    target = module.console_alb
+    outputs = {
+      dns_name          = "internal-console.example.com"
+      security_group_id = "sg-0123456789abcdef0"
+      target_groups = {
+        control-plane = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/cp/0123456789abcdef" }
+        web           = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/web/0123456789abcdef" }
+      }
+    }
+  }
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+  assert {
+    condition = jsondecode(one([
+      for e in module.ecs.services["proxy-monster-tailscale"].container_definitions["config-init"].container_definition.environment : e.value if e.name == "TS_SERVE_CONFIG_JSON"
+      ])).Services["svc:pm-console"].TCP == {
+      "80"  = { TCPForward = "internal-console.example.com:80" }
+      "443" = { TCPForward = "internal-console.example.com:443" }
+    }
+    error_message = "The serve config must forward the Service's 80 and 443 to the console ALB."
+  }
+}

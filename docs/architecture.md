@@ -19,7 +19,7 @@ admits callers outside the VPC CIDR.
 
 | File | Creates |
 |---|---|
-| `ecs.tf` | ECS cluster; services `control-plane`, `web`, `auditmon`, and `proxy-<ds>` per entry of `datasources` |
+| `ecs.tf` | ECS cluster; services `control-plane`, `web`, `auditmon`, `proxy-<ds>` per entry of `datasources`, and `<name>-tailscale` when `tailscale` is set |
 | `alb.tf` | Console ALB, HTTPS listener on an existing ACM cert, HTTP→HTTPS redirect |
 | `nlb.tf` | Internal NLB: control-plane HTTP/gRPC and one listener per datasource wire port |
 | `aurora.tf` | Aurora Serverless v2 PostgreSQL for the control-plane store |
@@ -51,6 +51,18 @@ admits callers outside the VPC CIDR.
 - Apply role: `target_credentials_key_admin_role_arns` and
   `rds_admin_key_enabler_role_arns` must name the role that runs `terraform apply`,
   or the KMS key policies refuse it.
+- Tailnet console (optional): `tailscale` runs one keyless Tailscale node that
+  advertises a Tailscale Service and forwards 80/443 to the console ALB. Before
+  the first apply:
+  - Enable IAM outbound web identity federation in the account.
+  - In the tailnet, define the Service, let the tag own and auto-approve it, and
+    create a federated identity whose issuer is the account's
+    `https://<id>.tokens.sts.global.api.aws` URL, whose subject is the
+    `tailscale_task_role_arn` output, and whose scopes allow `auth_keys` with
+    that tag. Its id is `tailscale.client_id`.
+
+  The console records the node's private address as `requester_ip` for clients
+  that arrive this way.
 
 ## Secrets
 

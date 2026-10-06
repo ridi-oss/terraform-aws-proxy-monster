@@ -694,6 +694,51 @@ variable "target_credential_groups" {
   }
 }
 
+variable "tailscale" {
+  type = object({
+    service_name = string
+    tag          = string
+    client_id    = string
+    image        = string
+  })
+  description = <<-EOT
+    Tailscale Service host for the console, or null for none. Runs one keyless tailscale node
+    (AWS outbound web identity federation) in the private subnets. It advertises service_name
+    and forwards ports 80 and 443 as plain TCP to the console ALB, so TLS still terminates on
+    the ALB with the console_hostname certificate. Point the console_hostname DNS record at the
+    Service VIP to move clients onto it. The ALB does not accept PROXY protocol, so the console
+    records the host's private address as requester_ip for every client that arrives this way.
+
+    The caller's tailnet must already define the Service, let tag own and auto-approve it, and
+    trust a federated identity whose issuer is the account's STS token URL
+    (https://<id>.tokens.sts.global.api.aws, after enabling IAM outbound web identity
+    federation), whose subject is the tailscale_task_role_arn output, and whose scopes allow
+    auth_keys with tag; client_id is that identity's id. image must be digest-pinned: ECS resolves a tag again on every
+    deployment, so the tailscale version would otherwise change without a plan.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.tailscale == null ? true : can(regex("^svc:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.tailscale.service_name))
+    error_message = "tailscale.service_name must be svc: followed by a lowercase DNS label."
+  }
+
+  validation {
+    condition     = var.tailscale == null ? true : trimspace(var.tailscale.client_id) != ""
+    error_message = "tailscale.client_id must not be empty."
+  }
+
+  validation {
+    condition     = var.tailscale == null ? true : startswith(var.tailscale.tag, "tag:")
+    error_message = "tailscale.tag must start with tag:."
+  }
+
+  validation {
+    condition     = var.tailscale == null ? true : strcontains(var.tailscale.image, "@sha256:")
+    error_message = "tailscale.image must be pinned by digest (image@sha256:...)."
+  }
+}
+
 variable "target_credentials_key_admin_role_arns" {
   type        = list(string)
   description = <<-EOT
