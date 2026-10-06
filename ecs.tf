@@ -123,6 +123,10 @@ locals {
 }
 
 locals {
+  tailscale_service           = "${var.name}-tailscale"
+  tailscale_audience          = "tailscale.workload.identity"
+  tailscale_tasks_role_name   = "${var.name}-tailscale-tasks"
+  tailscale_tasks_role_arn    = "arn:aws:iam::${local.aws_account_id}:role/${local.tailscale_tasks_role_name}"
   tailscale_serve_config_path = "/data/ts/serve.json"
   tailscale_serve_config = var.tailscale == null ? "" : jsonencode({
     Services = {
@@ -653,7 +657,7 @@ module "ecs" {
       }
     },
     var.tailscale == null ? {} : {
-      tailscale = {
+      (local.tailscale_service) = {
         cpu    = 256
         memory = 512
 
@@ -665,10 +669,10 @@ module "ecs" {
             image     = var.tailscale.image
 
             environment = [
-              { name = "TS_HOSTNAME", value = trimprefix(var.tailscale.tag, "tag:") },
+              { name = "TS_HOSTNAME", value = local.tailscale_service },
               { name = "TS_USERSPACE", value = "true" },
               { name = "TS_CLIENT_ID", value = var.tailscale.client_id },
-              { name = "TS_AUDIENCE", value = "tailscale.workload.identity" },
+              { name = "TS_AUDIENCE", value = local.tailscale_audience },
               { name = "TS_EXTRA_ARGS", value = "--advertise-tags=${var.tailscale.tag}" },
               { name = "TS_ACCEPT_DNS", value = "false" },
               { name = "TS_TAILSCALED_EXTRA_ARGS", value = "--port=41641" },
@@ -684,7 +688,7 @@ module "ecs" {
             mountPoints = [{ sourceVolume = "tailscale-config", containerPath = dirname(local.tailscale_serve_config_path), readOnly = true }]
 
             healthCheck = {
-              command     = ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
+              command     = ["CMD-SHELL", "wget -q --spider http://127.0.0.1:8080/healthz || exit 1"]
               interval    = 30
               timeout     = 5
               retries     = 3
@@ -720,7 +724,7 @@ module "ecs" {
 
         subnet_ids = var.private_subnets
 
-        tasks_iam_role_name            = "${var.name}-tailscale-tasks"
+        tasks_iam_role_name            = local.tailscale_tasks_role_name
         tasks_iam_role_use_name_prefix = false
         tasks_iam_role_statements = [
           {
@@ -730,7 +734,7 @@ module "ecs" {
               {
                 test     = "ForAllValues:StringEquals"
                 variable = "sts:IdentityTokenAudience"
-                values   = ["tailscale.workload.identity"]
+                values   = [local.tailscale_audience]
               },
               {
                 test     = "Null"
@@ -751,7 +755,7 @@ module "ecs" {
             from_port   = 41641
             to_port     = 41641
             ip_protocol = "udp"
-            cidr_ipv4   = "0.0.0.0/0"
+            cidr_ipv4   = var.vpc_cidr
             description = "Tailscale WireGuard"
           }
         }

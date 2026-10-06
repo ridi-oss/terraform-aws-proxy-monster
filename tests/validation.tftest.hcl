@@ -309,8 +309,8 @@ run "tailscale_null_adds_no_host" {
     }
   }
   assert {
-    condition     = !contains(keys(module.ecs.services), "tailscale")
-    error_message = "A null tailscale must add no service."
+    condition     = !contains(keys(module.ecs.services), "proxy-monster-tailscale") && output.tailscale_task_role_arn == null
+    error_message = "A null tailscale must add no service and no role."
   }
 }
 
@@ -329,11 +329,15 @@ run "tailscale_host_advertises_the_service" {
   }
   assert {
     condition = alltrue([
-      contains(module.ecs.services["tailscale"].container_definitions["tailscale"].container_definition.environment, { name = "TS_CLIENT_ID", value = "example-client-id" }),
-      contains(module.ecs.services["tailscale"].container_definitions["tailscale"].container_definition.environment, { name = "TS_EXTRA_ARGS", value = "--advertise-tags=tag:pm-console-host" }),
-      contains(module.ecs.services["tailscale"].container_definitions["tailscale"].container_definition.environment, { name = "TS_SERVE_CONFIG", value = "/data/ts/serve.json" }),
+      contains(module.ecs.services["proxy-monster-tailscale"].container_definitions["tailscale"].container_definition.environment, { name = "TS_CLIENT_ID", value = "example-client-id" }),
+      contains(module.ecs.services["proxy-monster-tailscale"].container_definitions["tailscale"].container_definition.environment, { name = "TS_EXTRA_ARGS", value = "--advertise-tags=tag:pm-console-host" }),
+      contains(module.ecs.services["proxy-monster-tailscale"].container_definitions["tailscale"].container_definition.environment, { name = "TS_SERVE_CONFIG", value = "/data/ts/serve.json" }),
     ])
     error_message = "The tailscale host must authenticate with client_id, advertise its tag, and read the serve config."
+  }
+  assert {
+    condition     = output.tailscale_task_role_arn == "arn:aws:iam::111111111111:role/proxy-monster-tailscale-tasks"
+    error_message = "The role ARN must be known at plan time so a caller can trust it before the role exists."
   }
 }
 
@@ -348,6 +352,38 @@ run "tailscale_tag_only_image_is_rejected" {
       tag          = "tag:pm-console-host"
       client_id    = "example-client-id"
       image        = "tailscale/tailscale:stable"
+    }
+  }
+  expect_failures = [var.tailscale]
+}
+
+run "tailscale_service_name_must_be_a_dns_label" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:PM_Console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+  expect_failures = [var.tailscale]
+}
+
+run "tailscale_empty_client_id_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = " "
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
     }
   }
   expect_failures = [var.tailscale]

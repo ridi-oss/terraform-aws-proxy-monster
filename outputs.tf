@@ -74,7 +74,7 @@ output "secret_arns" {
 
 output "tailscale_task_role_arn" {
   description = "IAM role the Tailscale Service host runs as; the subject of its Tailscale federated identity. null when tailscale is null."
-  value       = var.tailscale == null ? null : module.ecs.services["tailscale"].tasks_iam_role_arn
+  value       = var.tailscale == null ? null : local.tailscale_tasks_role_arn
 }
 
 output "target_credentials_key_arn" {
