@@ -212,7 +212,7 @@ module "seal_audit_logs" {
 # Broad on purpose: CloudTrail renders targets inconsistently and suffixes lambda event names.
 module "seal_audit" {
   source  = "terraform-aws-modules/eventbridge/aws"
-  version = "~> 3.13"
+  version = "~> 4.3"
 
   count = local.bootstrap_enabled ? 1 : 0
 
