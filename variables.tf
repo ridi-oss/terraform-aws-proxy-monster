@@ -694,6 +694,43 @@ variable "target_credential_groups" {
   }
 }
 
+variable "tailscale" {
+  type = object({
+    service_name = string
+    tag          = string
+    client_id    = string
+    image        = string
+  })
+  description = <<-EOT
+    Tailscale Service host for the console, or null for none. Runs one keyless tailscale node
+    (AWS outbound web identity federation) in the private subnets. It advertises service_name
+    and forwards ports 80 and 443 as plain TCP to the console ALB, so TLS still terminates on
+    the ALB with the console_hostname certificate. Point the console_hostname DNS record at the
+    Service VIP to move clients onto it.
+
+    The caller's tailnet must already define the Service, let tag own and auto-approve it, and
+    trust a federated identity whose subject is the tailscale_task_role_arn output; client_id
+    is that identity's id. image must be digest-pinned, because ECS does not resolve a tag to
+    a digest at deploy time here.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.tailscale == null ? true : startswith(var.tailscale.service_name, "svc:")
+    error_message = "tailscale.service_name must start with svc:."
+  }
+
+  validation {
+    condition     = var.tailscale == null ? true : startswith(var.tailscale.tag, "tag:")
+    error_message = "tailscale.tag must start with tag:."
+  }
+
+  validation {
+    condition     = var.tailscale == null ? true : strcontains(var.tailscale.image, "@sha256:")
+    error_message = "tailscale.image must be pinned by digest (image@sha256:...)."
+  }
+}
+
 variable "target_credentials_key_admin_role_arns" {
   type        = list(string)
   description = <<-EOT

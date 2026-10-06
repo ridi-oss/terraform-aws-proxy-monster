@@ -122,6 +122,20 @@ locals {
   ))
 }
 
+locals {
+  tailscale_serve_config_path = "/data/ts/serve.json"
+  tailscale_serve_config = var.tailscale == null ? "" : jsonencode({
+    Services = {
+      (var.tailscale.service_name) = {
+        TCP = {
+          "80"  = { TCPForward = "${module.console_alb.dns_name}:80" }
+          "443" = { TCPForward = "${module.console_alb.dns_name}:443" }
+        }
+      }
+    }
+  })
+}
+
 module "ecs" {
   source  = "terraform-aws-modules/ecs/aws"
   version = "~> 7.5"
@@ -624,6 +638,128 @@ module "ecs" {
             ip_protocol = "-1"
             cidr_ipv4   = "0.0.0.0/0"
             description = "Aurora, S3, KMS, Secrets Manager, CloudWatch Logs, ECR"
+          }
+        }
+
+        desired_count      = 1
+        enable_autoscaling = false
+
+        requires_compatibilities = ["FARGATE"]
+        launch_type              = "FARGATE"
+        runtime_platform = {
+          cpu_architecture        = "ARM64"
+          operating_system_family = "LINUX"
+        }
+      }
+    },
+    var.tailscale == null ? {} : {
+      tailscale = {
+        cpu    = 256
+        memory = 512
+
+        volume = { tailscale-config = {} }
+
+        container_definitions = {
+          tailscale = {
+            essential = true
+            image     = var.tailscale.image
+
+            environment = [
+              { name = "TS_HOSTNAME", value = trimprefix(var.tailscale.tag, "tag:") },
+              { name = "TS_USERSPACE", value = "true" },
+              { name = "TS_CLIENT_ID", value = var.tailscale.client_id },
+              { name = "TS_AUDIENCE", value = "tailscale.workload.identity" },
+              { name = "TS_EXTRA_ARGS", value = "--advertise-tags=${var.tailscale.tag}" },
+              { name = "TS_ACCEPT_DNS", value = "false" },
+              { name = "TS_TAILSCALED_EXTRA_ARGS", value = "--port=41641" },
+              { name = "TS_ENABLE_HEALTH_CHECK", value = "true" },
+              { name = "TS_LOCAL_ADDR_PORT", value = "0.0.0.0:8080" },
+              { name = "TS_SERVE_CONFIG", value = local.tailscale_serve_config_path },
+              { name = "AWS_REGION", value = local.aws_region },
+            ]
+
+            readonlyRootFilesystem = false
+
+            dependsOn   = [{ containerName = "config-init", condition = "SUCCESS" }]
+            mountPoints = [{ sourceVolume = "tailscale-config", containerPath = dirname(local.tailscale_serve_config_path), readOnly = true }]
+
+            healthCheck = {
+              command     = ["CMD-SHELL", "wget -q --spider http://localhost:8080/healthz || exit 1"]
+              interval    = 30
+              timeout     = 5
+              retries     = 3
+              startPeriod = 30
+            }
+
+            linuxParameters = {
+              initProcessEnabled = true
+            }
+
+            enable_cloudwatch_logging = true
+          }
+
+          config-init = {
+            essential  = false
+            image      = "public.ecr.aws/docker/library/busybox:1.37"
+            user       = "0"
+            entrypoint = ["/bin/sh", "-c"]
+            command = [join(" ", [
+              "set -eu;",
+              "printf %s \"$TS_SERVE_CONFIG_JSON\" > ${local.tailscale_serve_config_path}",
+            ])]
+
+            environment = [
+              { name = "TS_SERVE_CONFIG_JSON", value = local.tailscale_serve_config },
+            ]
+
+            mountPoints = [{ sourceVolume = "tailscale-config", containerPath = dirname(local.tailscale_serve_config_path), readOnly = false }]
+
+            enable_cloudwatch_logging = true
+          }
+        }
+
+        subnet_ids = var.private_subnets
+
+        tasks_iam_role_name            = "${var.name}-tailscale-tasks"
+        tasks_iam_role_use_name_prefix = false
+        tasks_iam_role_statements = [
+          {
+            actions   = ["sts:GetWebIdentityToken"]
+            resources = ["*"]
+            condition = [
+              {
+                test     = "ForAllValues:StringEquals"
+                variable = "sts:IdentityTokenAudience"
+                values   = ["tailscale.workload.identity"]
+              },
+              {
+                test     = "Null"
+                variable = "sts:IdentityTokenAudience"
+                values   = ["false"]
+              },
+              {
+                test     = "NumericLessThanEquals"
+                variable = "sts:DurationSeconds"
+                values   = ["300"]
+              },
+            ]
+          },
+        ]
+
+        security_group_ingress_rules = {
+          wireguard = {
+            from_port   = 41641
+            to_port     = 41641
+            ip_protocol = "udp"
+            cidr_ipv4   = "0.0.0.0/0"
+            description = "Tailscale WireGuard"
+          }
+        }
+        security_group_egress_rules = {
+          all = {
+            ip_protocol = "-1"
+            cidr_ipv4   = "0.0.0.0/0"
+            description = "Tailscale control plane and DERP, console ALB, ECR, CloudWatch Logs"
           }
         }
 

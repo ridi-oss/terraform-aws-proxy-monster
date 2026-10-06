@@ -72,6 +72,11 @@ output "secret_arns" {
   )
 }
 
+output "tailscale_task_role_arn" {
+  description = "IAM role the Tailscale Service host runs as; the subject of its Tailscale federated identity. null when tailscale is null."
+  value       = var.tailscale == null ? null : module.ecs.services["tailscale"].tasks_iam_role_arn
+}
+
 output "target_credentials_key_arn" {
   description = "KMS key ARN guarding the bootstrapped target-credentials secrets."
   value       = try(module.target_credentials_key[0].key_arn, null)
