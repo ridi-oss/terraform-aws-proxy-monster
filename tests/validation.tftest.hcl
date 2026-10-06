@@ -388,3 +388,38 @@ run "tailscale_empty_client_id_is_rejected" {
   }
   expect_failures = [var.tailscale]
 }
+
+run "tailscale_serve_config_forwards_80_and_443_to_the_alb" {
+  command = plan
+  override_module {
+    target = module.console_alb
+    outputs = {
+      dns_name          = "internal-console.example.com"
+      security_group_id = "sg-0123456789abcdef0"
+      target_groups = {
+        control-plane = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/cp/0123456789abcdef" }
+        web           = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/web/0123456789abcdef" }
+      }
+    }
+  }
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+  assert {
+    condition = jsondecode(one([
+      for e in module.ecs.services["proxy-monster-tailscale"].container_definitions["config-init"].container_definition.environment : e.value if e.name == "TS_SERVE_CONFIG_JSON"
+      ])).Services["svc:pm-console"].TCP == {
+      "80"  = { TCPForward = "internal-console.example.com:80" }
+      "443" = { TCPForward = "internal-console.example.com:443" }
+    }
+    error_message = "The serve config must forward the Service's 80 and 443 to the console ALB."
+  }
+}

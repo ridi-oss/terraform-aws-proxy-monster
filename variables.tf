@@ -710,8 +710,10 @@ variable "tailscale" {
     records the host's private address as requester_ip for every client that arrives this way.
 
     The caller's tailnet must already define the Service, let tag own and auto-approve it, and
-    trust a federated identity whose subject is the tailscale_task_role_arn output; client_id
-    is that identity's id. image must be digest-pinned: ECS resolves a tag again on every
+    trust a federated identity whose issuer is the account's STS token URL
+    (https://<id>.tokens.sts.global.api.aws, after enabling IAM outbound web identity
+    federation), whose subject is the tailscale_task_role_arn output, and whose scopes allow
+    auth_keys with tag; client_id is that identity's id. image must be digest-pinned: ECS resolves a tag again on every
     deployment, so the tailscale version would otherwise change without a plan.
   EOT
   default     = null
