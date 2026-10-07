@@ -700,6 +700,12 @@ variable "tailscale" {
     tag          = string
     client_id    = string
     image        = string
+    edge = optional(object({
+      certificate_arn   = string
+      caddy_image       = string
+      cli_image         = string
+      redeploy_schedule = optional(string, "rate(30 days)")
+    }))
   })
   description = <<-EOT
     Tailscale Service host for the console, or null for none. Runs one keyless tailscale node
@@ -715,6 +721,15 @@ variable "tailscale" {
     federation), whose subject is the tailscale_task_role_arn output, and whose scopes allow
     auth_keys with tag; client_id is that identity's id. image must be digest-pinned: ECS resolves a tag again on every
     deployment, so the tailscale version would otherwise change without a plan.
+
+    edge, when set, records each tailnet client's own address as requester_ip instead. The host
+    forwards with PROXY protocol v2 to a Caddy sidecar, which terminates TLS with certificate_arn
+    and sets X-Forwarded-For, then reaches the control plane and web through a dedicated internal
+    NLB that admits only this host. The console ALB is not on this path. certificate_arn must be
+    an ACM certificate for console_hostname issued with export enabled: a cli_image container
+    (aws-cli v2 on Amazon Linux 2023) exports it on every task start, and redeploy_schedule
+    restarts the task so a renewed certificate is picked up. caddy_image and cli_image must be
+    digest-pinned.
   EOT
   default     = null
 
@@ -736,6 +751,16 @@ variable "tailscale" {
   validation {
     condition     = var.tailscale == null ? true : strcontains(var.tailscale.image, "@sha256:")
     error_message = "tailscale.image must be pinned by digest (image@sha256:...)."
+  }
+
+  validation {
+    condition     = try(var.tailscale.edge, null) == null ? true : can(regex("^arn:aws[a-z-]*:acm:[a-z0-9-]+:[0-9]{12}:certificate/", var.tailscale.edge.certificate_arn))
+    error_message = "tailscale.edge.certificate_arn must be an ACM certificate ARN."
+  }
+
+  validation {
+    condition     = try(var.tailscale.edge, null) == null ? true : alltrue([for image in [var.tailscale.edge.caddy_image, var.tailscale.edge.cli_image] : strcontains(image, "@sha256:")])
+    error_message = "tailscale.edge.caddy_image and tailscale.edge.cli_image must be pinned by digest (image@sha256:...)."
   }
 }
 

@@ -423,3 +423,134 @@ run "tailscale_serve_config_forwards_80_and_443_to_the_alb" {
     error_message = "The serve config must forward the Service's 80 and 443 to the console ALB."
   }
 }
+
+run "tailscale_edge_forwards_with_proxy_protocol_to_caddy" {
+  command = plan
+  override_module {
+    target = module.edge_nlb
+    outputs = {
+      dns_name          = "internal-edge.example.com"
+      security_group_id = "sg-0fedcba9876543210"
+      target_groups = {
+        cp-http = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/edge-cp/0123456789abcdef" }
+        web     = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/edge-web/0123456789abcdef" }
+      }
+    }
+  }
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      edge = {
+        certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/11111111-1111-1111-1111-111111111111"
+        caddy_image     = "caddy@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        cli_image       = "amazon/aws-cli@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    }
+  }
+  assert {
+    condition = jsondecode(one([
+      for e in module.ecs.services["proxy-monster-tailscale"].container_definitions["config-init"].container_definition.environment : e.value if e.name == "TS_SERVE_CONFIG_JSON"
+      ])).Services["svc:pm-console"].TCP == {
+      "80"  = { TCPForward = "127.0.0.1:8880", ProxyProtocol = 2 }
+      "443" = { TCPForward = "127.0.0.1:8443", ProxyProtocol = 2 }
+    }
+    error_message = "With edge, the serve config must hand 80 and 443 to the local Caddy with a PROXY v2 header."
+  }
+  assert {
+    condition = alltrue([
+      for line in [
+        "reverse_proxy @control_plane internal-edge.example.com:8080",
+        "reverse_proxy internal-edge.example.com:41300",
+        "allow 127.0.0.1/32",
+      ] : strcontains(local.edge_caddyfile, line)
+    ]) && !strcontains(local.edge_caddyfile, "console")
+    error_message = "Caddy must accept PROXY headers only from localhost and reach both upstreams through the edge NLB, never the console ALB."
+  }
+  assert {
+    condition = alltrue([
+      contains(keys(module.ecs.services["proxy-monster-tailscale"].container_definitions), "caddy"),
+      contains(keys(module.ecs.services["proxy-monster-tailscale"].container_definitions), "cert-init"),
+    ])
+    error_message = "With edge, the tailscale task must run cert-init and caddy."
+  }
+  assert {
+    condition     = keys(aws_vpc_security_group_ingress_rule.edge_nlb_from_tailscale) == ["cp-http", "web"]
+    error_message = "The edge NLB must admit the tailscale host on exactly the control-plane and web ports."
+  }
+  assert {
+    condition     = length(module.edge_redeploy) == 1
+    error_message = "With edge, a schedule must restart the host so a renewed certificate is exported."
+  }
+}
+
+run "tailscale_without_edge_adds_no_edge_resources" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+  assert {
+    condition = alltrue([
+      length(module.edge_nlb) == 0,
+      length(module.edge_redeploy) == 0,
+      length(aws_vpc_security_group_ingress_rule.edge_nlb_from_tailscale) == 0,
+      !contains(keys(module.ecs.services["proxy-monster-tailscale"].container_definitions), "caddy"),
+    ])
+    error_message = "A tailscale host without edge must add no edge NLB, schedule, rule, or Caddy."
+  }
+}
+
+run "tailscale_edge_tag_only_image_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      edge = {
+        certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/11111111-1111-1111-1111-111111111111"
+        caddy_image     = "caddy:2"
+        cli_image       = "amazon/aws-cli@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    }
+  }
+  expect_failures = [var.tailscale]
+}
+
+run "tailscale_edge_certificate_must_be_acm" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      edge = {
+        certificate_arn = "arn:aws:iam::111111111111:server-certificate/console"
+        caddy_image     = "caddy@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        cli_image       = "amazon/aws-cli@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    }
+  }
+  expect_failures = [var.tailscale]
+}
