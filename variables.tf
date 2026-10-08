@@ -137,8 +137,10 @@ variable "datasources" {
       # workgroup's query-result location read-write, and every table location the datasource serves
       # read-only. Athena reads table data as the caller, so these bound what the datasource can see
       # regardless of policy.
-      result_prefix = string
-      data_prefixes = list(string)
+      result_prefix         = string
+      data_prefixes         = list(string)
+      denied_glue_resources = optional(list(string), [])
+      lake_formation        = optional(bool, false)
     }))
   }))
   description = <<-EOT
@@ -147,6 +149,10 @@ variable "datasources" {
     target_credential_groups entry and the bootstrap function then fills and seals that secret, left
     null it stays a hand-filled shell. An athena datasource has no target and no secret: the proxy's
     task role calls Athena in this account on the athena block's workgroup, catalog and database.
+    athena.denied_glue_resources lists Glue resources ("database/<db>" or "table/<db>/<table>", "*"
+    allowed) the task role is explicitly denied, so a sensitive table inside a readable data prefix
+    stays unreadable. athena.lake_formation grants lakeformation:GetDataAccess, needed once a table
+    location is registered with Lake Formation, which still decides what the vended credentials read.
     description is one line, at most 500 characters, shown to MCP agents.
     target.tls is the proxy's TLS toward the target DB (PM_TARGET_TLS): disable, require, verify-ca
     or verify-full. verify-full checks the certificate against target.host, so that must be the
@@ -194,6 +200,16 @@ variable "datasources" {
       if ds.athena != null
     ])
     error_message = "athena.workgroup must be an Athena workgroup name, and athena.catalog must be AwsDataCatalog: the task role reaches only this account's Glue catalog."
+  }
+
+  validation {
+    condition = alltrue([
+      for ds in var.datasources : alltrue([
+        for resource in ds.athena.denied_glue_resources : can(regex("^(database/[^/]+|table/[^/]+/[^/]+)$", resource))
+      ])
+      if ds.athena != null
+    ])
+    error_message = "athena.denied_glue_resources entries must be \"database/<db>\" or \"table/<db>/<table>\"."
   }
 
   validation {

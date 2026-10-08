@@ -46,6 +46,9 @@ admits callers outside the VPC CIDR.
   `target_credential_groups`. An `athena` datasource has no target DB or
   credentials secret: its proxy's task role queries Athena in this account,
   scoped to one workgroup, catalog, and set of S3 prefixes.
+  `athena.denied_glue_resources` carves sensitive databases and tables out of
+  that scope with an explicit Deny, and `athena.lake_formation` adds the
+  `lakeformation:GetDataAccess` that Lake Formation-registered locations need.
 - Naming: `instance.name` is the MCP install name (`pmon-<name>`); unset, it is
   the first label of `console_hostname`.
 - Apply role: `target_credentials_key_admin_role_arns` and
