@@ -128,7 +128,16 @@ locals {
   tailscale_tasks_role_name   = "${var.name}-tailscale-tasks"
   tailscale_tasks_role_arn    = "arn:aws:iam::${local.aws_account_id}:role/${local.tailscale_tasks_role_name}"
   tailscale_serve_config_path = "/data/ts/serve.json"
-  tailscale_serve_config = var.tailscale == null ? "" : jsonencode({
+  tailscale_serve_config = var.tailscale == null ? "" : local.edge_enabled ? jsonencode({
+    Services = {
+      (var.tailscale.service_name) = {
+        TCP = {
+          "80"  = { TCPForward = "127.0.0.1:${local.edge_http_port}", ProxyProtocol = 2 }
+          "443" = { TCPForward = "127.0.0.1:${local.edge_https_port}", ProxyProtocol = 2 }
+        }
+      }
+    }
+    }) : jsonencode({
     Services = {
       (var.tailscale.service_name) = {
         TCP = {
@@ -204,26 +213,36 @@ module "ecs" {
 
         task_exec_secret_arns = local.control_plane_secret_arns
 
-        security_group_ingress_rules = {
-          alb-http = {
-            from_port                    = 8080
-            to_port                      = 8080
-            ip_protocol                  = "tcp"
-            referenced_security_group_id = module.console_alb.security_group_id
-          }
-          nlb-http = {
-            from_port                    = 8080
-            to_port                      = 8080
-            ip_protocol                  = "tcp"
-            referenced_security_group_id = module.internal_nlb.security_group_id
-          }
-          nlb-grpc = {
-            from_port                    = 9090
-            to_port                      = 9090
-            ip_protocol                  = "tcp"
-            referenced_security_group_id = module.internal_nlb.security_group_id
-          }
-        }
+        security_group_ingress_rules = merge(
+          {
+            alb-http = {
+              from_port                    = 8080
+              to_port                      = 8080
+              ip_protocol                  = "tcp"
+              referenced_security_group_id = module.console_alb.security_group_id
+            }
+            nlb-http = {
+              from_port                    = 8080
+              to_port                      = 8080
+              ip_protocol                  = "tcp"
+              referenced_security_group_id = module.internal_nlb.security_group_id
+            }
+            nlb-grpc = {
+              from_port                    = 9090
+              to_port                      = 9090
+              ip_protocol                  = "tcp"
+              referenced_security_group_id = module.internal_nlb.security_group_id
+            }
+          },
+          { for key, value in {
+            edge-http = {
+              from_port                    = 8080
+              to_port                      = 8080
+              ip_protocol                  = "tcp"
+              referenced_security_group_id = try(module.edge_nlb[0].security_group_id, null)
+            }
+          } : key => value if local.edge_enabled },
+        )
         security_group_egress_rules = {
           all = {
             ip_protocol = "-1"
@@ -245,23 +264,32 @@ module "ecs" {
         # Flyway migrates the store on first boot before /health responds.
         health_check_grace_period_seconds = 120
 
-        load_balancer = {
-          alb-http = {
-            target_group_arn = module.console_alb.target_groups["control-plane"].arn
-            container_name   = "control-plane"
-            container_port   = 8080
-          }
-          nlb-http = {
-            target_group_arn = module.internal_nlb.target_groups["cp-http"].arn
-            container_name   = "control-plane"
-            container_port   = 8080
-          }
-          nlb-grpc = {
-            target_group_arn = module.internal_nlb.target_groups["cp-grpc"].arn
-            container_name   = "control-plane"
-            container_port   = 9090
-          }
-        }
+        load_balancer = merge(
+          {
+            alb-http = {
+              target_group_arn = module.console_alb.target_groups["control-plane"].arn
+              container_name   = "control-plane"
+              container_port   = 8080
+            }
+            nlb-http = {
+              target_group_arn = module.internal_nlb.target_groups["cp-http"].arn
+              container_name   = "control-plane"
+              container_port   = 8080
+            }
+            nlb-grpc = {
+              target_group_arn = module.internal_nlb.target_groups["cp-grpc"].arn
+              container_name   = "control-plane"
+              container_port   = 9090
+            }
+          },
+          { for key, value in {
+            edge-http = {
+              target_group_arn = try(local.edge_target_group_arns_after_listeners["cp-http"], null)
+              container_name   = "control-plane"
+              container_port   = 8080
+            }
+          } : key => value if local.edge_enabled },
+        )
       }
 
       web = {
@@ -291,14 +319,24 @@ module "ecs" {
 
         subnet_ids = var.private_subnets
 
-        security_group_ingress_rules = {
-          alb-http = {
-            from_port                    = 41300
-            to_port                      = 41300
-            ip_protocol                  = "tcp"
-            referenced_security_group_id = module.console_alb.security_group_id
-          }
-        }
+        security_group_ingress_rules = merge(
+          {
+            alb-http = {
+              from_port                    = 41300
+              to_port                      = 41300
+              ip_protocol                  = "tcp"
+              referenced_security_group_id = module.console_alb.security_group_id
+            }
+          },
+          { for key, value in {
+            edge-http = {
+              from_port                    = 41300
+              to_port                      = 41300
+              ip_protocol                  = "tcp"
+              referenced_security_group_id = try(module.edge_nlb[0].security_group_id, null)
+            }
+          } : key => value if local.edge_enabled },
+        )
         security_group_egress_rules = {
           all = {
             ip_protocol = "-1"
@@ -319,13 +357,22 @@ module "ecs" {
 
         health_check_grace_period_seconds = 60
 
-        load_balancer = {
-          alb-http = {
-            target_group_arn = module.console_alb.target_groups["web"].arn
-            container_name   = "web"
-            container_port   = 41300
-          }
-        }
+        load_balancer = merge(
+          {
+            alb-http = {
+              target_group_arn = module.console_alb.target_groups["web"].arn
+              container_name   = "web"
+              container_port   = 41300
+            }
+          },
+          { for key, value in {
+            edge-http = {
+              target_group_arn = try(local.edge_target_group_arns_after_listeners["web"], null)
+              container_name   = "web"
+              container_port   = 41300
+            }
+          } : key => value if local.edge_enabled },
+        )
       }
     },
     {
@@ -658,12 +705,12 @@ module "ecs" {
     },
     var.tailscale == null ? {} : {
       (local.tailscale_service) = {
-        cpu    = 256
-        memory = 512
+        cpu    = local.edge_enabled ? 512 : 256
+        memory = local.edge_enabled ? 1024 : 512
 
-        volume = { tailscale-config = {} }
+        volume = merge({ tailscale-config = {} }, { for key, value in { edge-certs = {} } : key => value if local.edge_enabled })
 
-        container_definitions = {
+        container_definitions = merge({
           tailscale = {
             essential = true
             image     = var.tailscale.image
@@ -707,48 +754,119 @@ module "ecs" {
             image      = "public.ecr.aws/docker/library/busybox:1.37"
             user       = "0"
             entrypoint = ["/bin/sh", "-c"]
-            command = [join(" ", [
-              "set -eu;",
-              "printf %s \"$TS_SERVE_CONFIG_JSON\" > ${local.tailscale_serve_config_path}",
-            ])]
+            command = [join(" ", concat(
+              [
+                "set -eu;",
+                "printf %s \"$TS_SERVE_CONFIG_JSON\" > ${local.tailscale_serve_config_path}",
+              ],
+              local.edge_enabled ? [
+                "; printf %s \"$EDGE_CADDYFILE\" > ${local.edge_caddyfile_path}",
+              ] : [],
+            ))]
 
-            environment = [
-              { name = "TS_SERVE_CONFIG_JSON", value = local.tailscale_serve_config },
-            ]
+            environment = concat(
+              [
+                { name = "TS_SERVE_CONFIG_JSON", value = local.tailscale_serve_config },
+              ],
+              local.edge_enabled ? [
+                { name = "EDGE_CADDYFILE", value = local.edge_caddyfile },
+              ] : [],
+            )
 
             mountPoints = [{ sourceVolume = "tailscale-config", containerPath = dirname(local.tailscale_serve_config_path), readOnly = false }]
 
             enable_cloudwatch_logging = true
           }
-        }
+          }, { for key, value in {
+            cert-init = {
+              essential              = false
+              image                  = try(local.tailscale_edge.cli_image, null)
+              user                   = "0"
+              entrypoint             = ["/bin/sh", "-c"]
+              readonlyRootFilesystem = false
+              command = [join(" ", [
+                "set -eu; umask 077;",
+                "EDGE_KEY_PASSPHRASE=$(python3 -c 'import secrets; print(secrets.token_hex(32))'); export EDGE_KEY_PASSPHRASE;",
+                "printf %s \"$EDGE_KEY_PASSPHRASE\" > /tmp/passphrase;",
+                "aws acm export-certificate --certificate-arn \"$EDGE_CERTIFICATE_ARN\" --passphrase fileb:///tmp/passphrase --output json > /tmp/export.json;",
+                "jq -r '.Certificate, .CertificateChain' /tmp/export.json > ${local.edge_cert_dir}/cert.pem;",
+                "jq -r '.PrivateKey' /tmp/export.json | python3 -c \"$EDGE_DECRYPT_KEY_PY\" > ${local.edge_cert_dir}/key.pem;",
+                "rm -f /tmp/export.json /tmp/passphrase",
+              ])]
+
+              environment = [
+                { name = "AWS_REGION", value = local.aws_region },
+                { name = "EDGE_CERTIFICATE_ARN", value = try(local.tailscale_edge.certificate_arn, null) },
+                { name = "EDGE_DECRYPT_KEY_PY", value = file("${path.module}/edge/decrypt_key.py") },
+              ]
+
+              mountPoints = [{ sourceVolume = "edge-certs", containerPath = local.edge_cert_dir, readOnly = false }]
+
+              enable_cloudwatch_logging = true
+            }
+
+            caddy = {
+              essential              = true
+              image                  = try(local.tailscale_edge.caddy_image, null)
+              command                = ["caddy", "run", "--config", local.edge_caddyfile_path, "--adapter", "caddyfile"]
+              readonlyRootFilesystem = false
+
+              dependsOn = [
+                { containerName = "config-init", condition = "SUCCESS" },
+                { containerName = "cert-init", condition = "SUCCESS" },
+              ]
+              mountPoints = [
+                { sourceVolume = "tailscale-config", containerPath = dirname(local.tailscale_serve_config_path), readOnly = true },
+                { sourceVolume = "edge-certs", containerPath = local.edge_cert_dir, readOnly = true },
+              ]
+
+              healthCheck = {
+                command     = ["CMD-SHELL", "wget -q --spider http://127.0.0.1:${local.edge_health}/healthz || exit 1"]
+                interval    = 30
+                timeout     = 5
+                retries     = 3
+                startPeriod = 15
+              }
+
+              enable_cloudwatch_logging = true
+            }
+        } : key => value if local.edge_enabled })
 
         subnet_ids = var.private_subnets
 
         tasks_iam_role_name            = local.tailscale_tasks_role_name
         tasks_iam_role_use_name_prefix = false
-        tasks_iam_role_statements = [
-          {
-            actions   = ["sts:GetWebIdentityToken"]
-            resources = ["*"]
-            condition = [
-              {
-                test     = "ForAllValues:StringEquals"
-                variable = "sts:IdentityTokenAudience"
-                values   = [local.tailscale_audience]
-              },
-              {
-                test     = "Null"
-                variable = "sts:IdentityTokenAudience"
-                values   = ["false"]
-              },
-              {
-                test     = "NumericLessThanEquals"
-                variable = "sts:DurationSeconds"
-                values   = ["300"]
-              },
-            ]
-          },
-        ]
+        tasks_iam_role_statements = concat(
+          [
+            {
+              actions   = ["sts:GetWebIdentityToken"]
+              resources = ["*"]
+              condition = [
+                {
+                  test     = "ForAllValues:StringEquals"
+                  variable = "sts:IdentityTokenAudience"
+                  values   = [local.tailscale_audience]
+                },
+                {
+                  test     = "Null"
+                  variable = "sts:IdentityTokenAudience"
+                  values   = ["false"]
+                },
+                {
+                  test     = "NumericLessThanEquals"
+                  variable = "sts:DurationSeconds"
+                  values   = ["300"]
+                },
+              ]
+            },
+          ],
+          local.edge_enabled ? [
+            {
+              actions   = ["acm:ExportCertificate"]
+              resources = [try(local.tailscale_edge.certificate_arn, null)]
+            },
+          ] : [],
+        )
 
         security_group_ingress_rules = {
           wireguard = {

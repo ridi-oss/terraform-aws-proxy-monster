@@ -22,6 +22,7 @@ admits callers outside the VPC CIDR.
 | `ecs.tf` | ECS cluster; services `control-plane`, `web`, `auditmon`, `proxy-<ds>` per entry of `datasources`, and `<name>-tailscale` when `tailscale` is set |
 | `alb.tf` | Console ALB, HTTPS listener on an existing ACM cert, HTTP→HTTPS redirect |
 | `nlb.tf` | Internal NLB: control-plane HTTP/gRPC and one listener per datasource wire port |
+| `edge.tf` + `edge/` | With `tailscale.edge`: a second internal NLB that admits only the Tailscale host, the Caddyfile and key-export helper for its sidecars, and the restart schedule |
 | `aurora.tf` | Aurora Serverless v2 PostgreSQL for the control-plane store |
 | `s3.tf` | Audit export bucket with Object Lock (`audit_lock_mode`, `audit_retention_days`) |
 | `kms.tf` | Keys: audit signer, target credentials, one `rds-admin/<alias>` per target account |
@@ -63,6 +64,24 @@ admits callers outside the VPC CIDR.
 
   The console records the node's private address as `requester_ip` for clients
   that arrive this way.
+- Tailnet client address (optional): `tailscale.edge` keeps each client's own
+  address instead.
+
+  ```
+  client ─▶ Service VIP ─▶ tailscale ─(PROXY v2)─▶ caddy :8443 ─▶ edge NLB ─▶ control-plane :8080 / web :41300
+  ```
+
+  - The node forwards 80 and 443 to a Caddy sidecar with a PROXY v2 header.
+    Caddy terminates TLS and sets `X-Forwarded-For` to the client, discarding any
+    value the client sent.
+  - Caddy routes the same paths the console ALB does through a dedicated NLB
+    whose security group admits only the node. The console ALB is not on this
+    path: it would append its own address to `X-Forwarded-For`, and the
+    control plane trusts only the rightmost entry.
+  - `certificate_arn` is an ACM certificate for `console_hostname` requested with
+    export enabled. A `cli_image` container exports it and decrypts the key on
+    every task start, so the key lives only on the task's volume.
+    `redeploy_schedule` restarts the task to pick up a renewed certificate.
 
 ## Secrets
 
