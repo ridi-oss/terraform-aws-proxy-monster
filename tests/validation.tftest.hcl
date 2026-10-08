@@ -291,6 +291,66 @@ run "athena_other_catalog_is_rejected" {
   expect_failures = [var.datasources]
 }
 
+run "athena_denied_glue_resources_plan" {
+  command = plan
+  variables {
+    datasources = {
+      dw = {
+        engine    = "athena"
+        wire_port = 40002
+        athena = {
+          workgroup             = "primary"
+          database              = "logs"
+          result_prefix         = "results-bucket/athena/"
+          data_prefixes         = ["data-bucket/warehouse/"]
+          denied_glue_resources = ["database/scratch", "table/logs/signin_*", "table/*/email_sent"]
+          lake_formation        = true
+        }
+      }
+    }
+  }
+}
+
+run "athena_denied_glue_resource_without_kind_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      dw = {
+        engine    = "athena"
+        wire_port = 40002
+        athena = {
+          workgroup             = "primary"
+          database              = "logs"
+          result_prefix         = "results-bucket/athena/"
+          data_prefixes         = ["data-bucket/warehouse/"]
+          denied_glue_resources = ["logs/email_sent"]
+        }
+      }
+    }
+  }
+  expect_failures = [var.datasources]
+}
+
+run "athena_denied_glue_resource_with_catalog_arn_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      dw = {
+        engine    = "athena"
+        wire_port = 40002
+        athena = {
+          workgroup             = "primary"
+          database              = "logs"
+          result_prefix         = "results-bucket/athena/"
+          data_prefixes         = ["data-bucket/warehouse/"]
+          denied_glue_resources = ["arn:aws:glue:us-east-1:111111111111:table/logs/email_sent"]
+        }
+      }
+    }
+  }
+  expect_failures = [var.datasources]
+}
+
 run "description_with_tab_is_rejected" {
   command = plan
   variables {

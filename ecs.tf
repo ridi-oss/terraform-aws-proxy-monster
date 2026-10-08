@@ -467,7 +467,15 @@ module "ecs" {
             resources = ["*"]
           },
           {
-            actions = ["glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables", "glue:GetPartition", "glue:GetPartitions"]
+            actions = [
+              "glue:BatchGetPartition",
+              "glue:GetDatabase",
+              "glue:GetDatabases",
+              "glue:GetPartition",
+              "glue:GetPartitions",
+              "glue:GetTable",
+              "glue:GetTables",
+            ]
             resources = [
               "arn:aws:glue:${local.aws_region}:${local.aws_account_id}:catalog",
               "arn:aws:glue:${local.aws_region}:${local.aws_account_id}:database/*",
@@ -502,7 +510,17 @@ module "ecs" {
               actions   = ["s3:GetObject", "s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]
               resources = ["arn:aws:s3:::${ds.athena.result_prefix}*"]
             },
-        ])
+          ],
+          !ds.athena.lake_formation ? [] : [{
+            actions   = ["lakeformation:GetDataAccess"]
+            resources = ["*"]
+          }],
+          length(ds.athena.denied_glue_resources) == 0 ? [] : [{
+            effect    = "Deny"
+            actions   = ["glue:*"]
+            resources = [for resource in ds.athena.denied_glue_resources : "arn:aws:glue:${local.aws_region}:${local.aws_account_id}:${resource}"]
+          }],
+        )
 
         # Deterministic name so policies can carry it as a literal ARN; a reference would cycle.
         task_exec_iam_role_use_name_prefix = false
