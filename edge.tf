@@ -11,6 +11,12 @@ locals {
     web     = 41300
   }
 
+  edge_target_group_arns_after_listeners = {
+    for key in keys(local.edge_upstream_ports) : key => (
+      module.edge_nlb[0].listeners[key].arn == null ? null : module.edge_nlb[0].target_groups[key].arn
+    ) if local.edge_enabled
+  }
+
   edge_caddyfile_path = "${dirname(local.tailscale_serve_config_path)}/Caddyfile"
   edge_caddyfile = !local.edge_enabled ? "" : templatefile("${path.module}/edge/Caddyfile.tftpl", {
     https_port             = local.edge_https_port

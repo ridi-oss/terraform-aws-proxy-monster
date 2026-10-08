@@ -284,7 +284,7 @@ module "ecs" {
           },
           { for key, value in {
             edge-http = {
-              target_group_arn = try(module.edge_nlb[0].target_groups["cp-http"].arn, null)
+              target_group_arn = try(local.edge_target_group_arns_after_listeners["cp-http"], null)
               container_name   = "control-plane"
               container_port   = 8080
             }
@@ -367,7 +367,7 @@ module "ecs" {
           },
           { for key, value in {
             edge-http = {
-              target_group_arn = try(module.edge_nlb[0].target_groups["web"].arn, null)
+              target_group_arn = try(local.edge_target_group_arns_after_listeners["web"], null)
               container_name   = "web"
               container_port   = 41300
             }

@@ -2,6 +2,7 @@
 	admin off
 	auto_https off
 	servers :${https_port} {
+		protocols h1 h2
 		listener_wrappers {
 			proxy_protocol {
 				timeout 5s

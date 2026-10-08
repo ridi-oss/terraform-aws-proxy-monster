@@ -431,6 +431,10 @@ run "tailscale_edge_forwards_with_proxy_protocol_to_caddy" {
     outputs = {
       dns_name          = "internal-edge.example.com"
       security_group_id = "sg-0fedcba9876543210"
+      listeners = {
+        cp-http = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:listener/net/edge/0123456789abcdef/0000000000000001" }
+        web     = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:listener/net/edge/0123456789abcdef/0000000000000002" }
+      }
       target_groups = {
         cp-http = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/edge-cp/0123456789abcdef" }
         web     = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/edge-web/0123456789abcdef" }

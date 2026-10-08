@@ -728,8 +728,8 @@ variable "tailscale" {
     NLB that admits only this host. The console ALB is not on this path. certificate_arn must be
     an ACM certificate for console_hostname issued with export enabled: a cli_image container
     (aws-cli v2 on Amazon Linux 2023) exports it on every task start, and redeploy_schedule
-    restarts the task so a renewed certificate is picked up. caddy_image and cli_image must be
-    digest-pinned.
+    restarts the task so a renewed certificate is picked up. ACM charges for an exportable
+    certificate at issuance and at each renewal. caddy_image and cli_image must be digest-pinned.
   EOT
   default     = null
 
