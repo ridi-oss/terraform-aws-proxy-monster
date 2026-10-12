@@ -16,6 +16,12 @@ locals {
       ]...)
     ])[0]
   ]
+
+  # The control-plane serves the RFC 8414/9728 discovery docs at the root
+  # /.well-known/oauth-* (oauth-authorization-server, oauth-protected-resource
+  # [/mcp]); route those to it too, else they fall through to the web default
+  # and MCP auth discovery breaks.
+  console_control_plane_paths = ["/api/*", "/auth/*", "/oauth/*", "/mcp*", "/.well-known/oauth-*"]
 }
 
 data "aws_subnet" "lb" {
@@ -109,11 +115,7 @@ module "console_alb" {
           priority = 100
           conditions = [{
             path_pattern = {
-              # The control-plane serves the RFC 8414/9728 discovery docs at the root
-              # /.well-known/oauth-* (oauth-authorization-server, oauth-protected-resource
-              # [/mcp]); route those to it too, else they fall through to the web default
-              # and MCP auth discovery breaks.
-              values = ["/api/*", "/auth/*", "/oauth/*", "/mcp*", "/.well-known/oauth-*"]
+              values = local.console_control_plane_paths
             }
           }]
           actions = [{

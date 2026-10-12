@@ -11,6 +11,11 @@ locals {
     web     = 41300
   }
 
+  edge_health_checks = {
+    cp-http = { path = "/health", matcher = "200", unhealthy_threshold = 2 }
+    web     = { path = "/", matcher = "200-399", unhealthy_threshold = 3 }
+  }
+
   edge_target_group_arns_after_listeners = {
     for key in keys(local.edge_upstream_ports) : key => (
       module.edge_nlb[0].listeners[key].arn == null ? null : module.edge_nlb[0].target_groups[key].arn
@@ -23,7 +28,7 @@ locals {
     http_port              = local.edge_http_port
     health_port            = local.edge_health
     cert_dir               = local.edge_cert_dir
-    control_plane_paths    = "/api/* /auth/* /oauth/* /mcp* /.well-known/oauth-*"
+    control_plane_paths    = join(" ", local.console_control_plane_paths)
     control_plane_upstream = "${module.edge_nlb[0].dns_name}:${local.edge_upstream_ports.cp-http}"
     web_upstream           = "${module.edge_nlb[0].dns_name}:${local.edge_upstream_ports.web}"
   })
@@ -41,7 +46,7 @@ module "edge_nlb" {
   vpc_id             = var.vpc_id
   subnets            = local.lb_subnets
 
-  enable_deletion_protection       = var.enable_lb_deletion_protection
+  enable_deletion_protection       = false
   enable_cross_zone_load_balancing = true
 
   security_group_ingress_rules = {}
@@ -71,10 +76,12 @@ module "edge_nlb" {
       create_attachment    = false
       deregistration_delay = 5
       health_check = {
-        protocol            = "TCP"
+        protocol            = "HTTP"
+        path                = local.edge_health_checks[key].path
+        matcher             = local.edge_health_checks[key].matcher
         interval            = 10
         healthy_threshold   = 2
-        unhealthy_threshold = 2
+        unhealthy_threshold = local.edge_health_checks[key].unhealthy_threshold
       }
     }
   }
@@ -89,6 +96,13 @@ resource "aws_vpc_security_group_ingress_rule" "edge_nlb_from_tailscale" {
   to_port                      = each.value
   ip_protocol                  = "tcp"
   description                  = "Caddy on the tailscale host"
+
+  lifecycle {
+    precondition {
+      condition     = split(":", local.tailscale_edge.certificate_arn)[3] == local.aws_region
+      error_message = "tailscale.edge.certificate_arn must be in the module's region, where the tailscale host exports it."
+    }
+  }
 }
 
 module "edge_redeploy" {

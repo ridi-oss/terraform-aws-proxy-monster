@@ -490,6 +490,17 @@ run "tailscale_edge_forwards_with_proxy_protocol_to_caddy" {
     error_message = "The edge NLB must admit the tailscale host on exactly the control-plane and web ports."
   }
   assert {
+    condition = contains(
+      module.ecs.services["proxy-monster-tailscale"].container_definitions["tailscale"].container_definition.dependsOn,
+      { containerName = "caddy", condition = "HEALTHY" },
+    )
+    error_message = "With edge, the tailscale node must wait for a healthy Caddy before it advertises the Service."
+  }
+  assert {
+    condition     = local.edge_health_checks["cp-http"].path == "/health" && strcontains(local.edge_caddyfile, "@control_plane path ${join(" ", local.console_control_plane_paths)}")
+    error_message = "The edge must health-check the control plane on /health and route the same paths as the console ALB."
+  }
+  assert {
     condition     = length(module.edge_redeploy) == 1
     error_message = "With edge, a schedule must restart the host so a renewed certificate is exported."
   }
@@ -561,4 +572,26 @@ run "tailscale_edge_certificate_must_be_acm" {
     }
   }
   expect_failures = [var.tailscale]
+}
+
+run "tailscale_edge_certificate_must_be_in_the_module_region" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      edge = {
+        certificate_arn = "arn:aws:acm:ap-northeast-2:111111111111:certificate/11111111-1111-1111-1111-111111111111"
+        caddy_image     = "caddy@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        cli_image       = "amazon/aws-cli@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        openssl_image   = "python@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+      }
+    }
+  }
+  expect_failures = [aws_vpc_security_group_ingress_rule.edge_nlb_from_tailscale]
 }

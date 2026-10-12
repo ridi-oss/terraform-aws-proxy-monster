@@ -731,7 +731,10 @@ module "ecs" {
 
             readonlyRootFilesystem = false
 
-            dependsOn   = [{ containerName = "config-init", condition = "SUCCESS" }]
+            dependsOn = concat(
+              [{ containerName = "config-init", condition = "SUCCESS" }],
+              local.edge_enabled ? [{ containerName = "caddy", condition = "HEALTHY" }] : [],
+            )
             mountPoints = [{ sourceVolume = "tailscale-config", containerPath = dirname(local.tailscale_serve_config_path), readOnly = true }]
 
             healthCheck = {
@@ -786,7 +789,7 @@ module "ecs" {
               readonlyRootFilesystem = false
               command = [join(" ", [
                 "set -eu; umask 077;",
-                "python3 -c 'import secrets; print(secrets.token_hex(32), end=\"\")' > ${local.edge_cert_dir}/passphrase;",
+                "od -An -N32 -tx1 /dev/urandom | tr -d ' \\n' > ${local.edge_cert_dir}/passphrase;",
                 "aws acm export-certificate --certificate-arn \"$EDGE_CERTIFICATE_ARN\" --passphrase fileb://${local.edge_cert_dir}/passphrase --output json > /tmp/export.json;",
                 "jq -r '.Certificate, .CertificateChain' /tmp/export.json > ${local.edge_cert_dir}/cert.pem;",
                 "jq -r '.PrivateKey' /tmp/export.json > ${local.edge_cert_dir}/key.enc;",

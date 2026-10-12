@@ -727,9 +727,12 @@ variable "tailscale" {
     forwards with PROXY protocol v2 to a Caddy sidecar, which terminates TLS with certificate_arn
     and sets X-Forwarded-For, then reaches the control plane and web through a dedicated internal
     NLB that admits only this host. The console ALB is not on this path. certificate_arn must be
-    an ACM certificate for console_hostname issued with export enabled. On every task start a
-    cli_image container (aws-cli v2) exports it, and an openssl_image container (any image with
-    the openssl command, such as python:3-slim) decrypts the key ACM always returns encrypted.
+    an ACM certificate for console_hostname in the module's region, issued with export enabled.
+    On every task start a cli_image container (the aws-cli v2 image on Amazon Linux 2023, which
+    ships jq) exports it, and an openssl_image container (any image with the openssl command,
+    such as python:3-slim) decrypts the key ACM always returns encrypted. image must be a
+    tailscale release whose Service TCP forwards honor ProxyProtocol (1.98.8 is verified): an
+    older one drops the field silently, and every client is then recorded as 127.0.0.1.
     redeploy_schedule restarts the task so a renewed certificate is picked up. ACM charges for an
     exportable certificate at issuance and at each renewal. caddy_image, cli_image, and
     openssl_image must be digest-pinned.
