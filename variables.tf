@@ -704,6 +704,7 @@ variable "tailscale" {
       certificate_arn   = string
       caddy_image       = string
       cli_image         = string
+      openssl_image     = string
       redeploy_schedule = optional(string, "rate(30 days)")
     }))
   })
@@ -726,10 +727,12 @@ variable "tailscale" {
     forwards with PROXY protocol v2 to a Caddy sidecar, which terminates TLS with certificate_arn
     and sets X-Forwarded-For, then reaches the control plane and web through a dedicated internal
     NLB that admits only this host. The console ALB is not on this path. certificate_arn must be
-    an ACM certificate for console_hostname issued with export enabled: a cli_image container
-    (aws-cli v2 on Amazon Linux 2023) exports it on every task start, and redeploy_schedule
-    restarts the task so a renewed certificate is picked up. ACM charges for an exportable
-    certificate at issuance and at each renewal. caddy_image and cli_image must be digest-pinned.
+    an ACM certificate for console_hostname issued with export enabled. On every task start a
+    cli_image container (aws-cli v2) exports it, and an openssl_image container (any image with
+    the openssl command, such as python:3-slim) decrypts the key ACM always returns encrypted.
+    redeploy_schedule restarts the task so a renewed certificate is picked up. ACM charges for an
+    exportable certificate at issuance and at each renewal. caddy_image, cli_image, and
+    openssl_image must be digest-pinned.
   EOT
   default     = null
 
@@ -759,8 +762,8 @@ variable "tailscale" {
   }
 
   validation {
-    condition     = try(var.tailscale.edge, null) == null ? true : alltrue([for image in [var.tailscale.edge.caddy_image, var.tailscale.edge.cli_image] : strcontains(image, "@sha256:")])
-    error_message = "tailscale.edge.caddy_image and tailscale.edge.cli_image must be pinned by digest (image@sha256:...)."
+    condition     = try(var.tailscale.edge, null) == null ? true : alltrue([for image in [var.tailscale.edge.caddy_image, var.tailscale.edge.cli_image, var.tailscale.edge.openssl_image] : strcontains(image, "@sha256:")])
+    error_message = "tailscale.edge.caddy_image, cli_image, and openssl_image must be pinned by digest (image@sha256:...)."
   }
 }
 

@@ -778,7 +778,7 @@ module "ecs" {
             enable_cloudwatch_logging = true
           }
           }, { for key, value in {
-            cert-init = {
+            cert-export = {
               essential              = false
               image                  = try(local.tailscale_edge.cli_image, null)
               user                   = "0"
@@ -786,20 +786,36 @@ module "ecs" {
               readonlyRootFilesystem = false
               command = [join(" ", [
                 "set -eu; umask 077;",
-                "EDGE_KEY_PASSPHRASE=$(python3 -c 'import secrets; print(secrets.token_hex(32))'); export EDGE_KEY_PASSPHRASE;",
-                "printf %s \"$EDGE_KEY_PASSPHRASE\" > /tmp/passphrase;",
-                "aws acm export-certificate --certificate-arn \"$EDGE_CERTIFICATE_ARN\" --passphrase fileb:///tmp/passphrase --output json > /tmp/export.json;",
+                "python3 -c 'import secrets; print(secrets.token_hex(32), end=\"\")' > ${local.edge_cert_dir}/passphrase;",
+                "aws acm export-certificate --certificate-arn \"$EDGE_CERTIFICATE_ARN\" --passphrase fileb://${local.edge_cert_dir}/passphrase --output json > /tmp/export.json;",
                 "jq -r '.Certificate, .CertificateChain' /tmp/export.json > ${local.edge_cert_dir}/cert.pem;",
-                "jq -r '.PrivateKey' /tmp/export.json | python3 -c \"$EDGE_DECRYPT_KEY_PY\" > ${local.edge_cert_dir}/key.pem;",
-                "rm -f /tmp/export.json /tmp/passphrase",
+                "jq -r '.PrivateKey' /tmp/export.json > ${local.edge_cert_dir}/key.enc;",
+                "rm -f /tmp/export.json",
               ])]
 
               environment = [
                 { name = "AWS_REGION", value = local.aws_region },
                 { name = "EDGE_CERTIFICATE_ARN", value = try(local.tailscale_edge.certificate_arn, null) },
-                { name = "EDGE_DECRYPT_KEY_PY", value = file("${path.module}/edge/decrypt_key.py") },
               ]
 
+              mountPoints = [{ sourceVolume = "edge-certs", containerPath = local.edge_cert_dir, readOnly = false }]
+
+              enable_cloudwatch_logging = true
+            }
+
+            cert-decrypt = {
+              essential              = false
+              image                  = try(local.tailscale_edge.openssl_image, null)
+              user                   = "0"
+              entrypoint             = ["/bin/sh", "-c"]
+              readonlyRootFilesystem = false
+              command = [join(" ", [
+                "set -eu; umask 077;",
+                "openssl pkey -in ${local.edge_cert_dir}/key.enc -passin file:${local.edge_cert_dir}/passphrase -out ${local.edge_cert_dir}/key.pem;",
+                "rm -f ${local.edge_cert_dir}/key.enc ${local.edge_cert_dir}/passphrase",
+              ])]
+
+              dependsOn   = [{ containerName = "cert-export", condition = "SUCCESS" }]
               mountPoints = [{ sourceVolume = "edge-certs", containerPath = local.edge_cert_dir, readOnly = false }]
 
               enable_cloudwatch_logging = true
@@ -813,7 +829,7 @@ module "ecs" {
 
               dependsOn = [
                 { containerName = "config-init", condition = "SUCCESS" },
-                { containerName = "cert-init", condition = "SUCCESS" },
+                { containerName = "cert-decrypt", condition = "SUCCESS" },
               ]
               mountPoints = [
                 { sourceVolume = "tailscale-config", containerPath = dirname(local.tailscale_serve_config_path), readOnly = true },

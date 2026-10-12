@@ -454,6 +454,7 @@ run "tailscale_edge_forwards_with_proxy_protocol_to_caddy" {
         certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/11111111-1111-1111-1111-111111111111"
         caddy_image     = "caddy@sha256:1111111111111111111111111111111111111111111111111111111111111111"
         cli_image       = "amazon/aws-cli@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        openssl_image   = "python@sha256:3333333333333333333333333333333333333333333333333333333333333333"
       }
     }
   }
@@ -479,9 +480,10 @@ run "tailscale_edge_forwards_with_proxy_protocol_to_caddy" {
   assert {
     condition = alltrue([
       contains(keys(module.ecs.services["proxy-monster-tailscale"].container_definitions), "caddy"),
-      contains(keys(module.ecs.services["proxy-monster-tailscale"].container_definitions), "cert-init"),
+      contains(keys(module.ecs.services["proxy-monster-tailscale"].container_definitions), "cert-export"),
+      contains(keys(module.ecs.services["proxy-monster-tailscale"].container_definitions), "cert-decrypt"),
     ])
-    error_message = "With edge, the tailscale task must run cert-init and caddy."
+    error_message = "With edge, the tailscale task must run cert-export, cert-decrypt, and caddy."
   }
   assert {
     condition     = keys(aws_vpc_security_group_ingress_rule.edge_nlb_from_tailscale) == ["cp-http", "web"]
@@ -532,6 +534,7 @@ run "tailscale_edge_tag_only_image_is_rejected" {
         certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/11111111-1111-1111-1111-111111111111"
         caddy_image     = "caddy:2"
         cli_image       = "amazon/aws-cli@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        openssl_image   = "python@sha256:3333333333333333333333333333333333333333333333333333333333333333"
       }
     }
   }
@@ -553,6 +556,7 @@ run "tailscale_edge_certificate_must_be_acm" {
         certificate_arn = "arn:aws:iam::111111111111:server-certificate/console"
         caddy_image     = "caddy@sha256:1111111111111111111111111111111111111111111111111111111111111111"
         cli_image       = "amazon/aws-cli@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        openssl_image   = "python@sha256:3333333333333333333333333333333333333333333333333333333333333333"
       }
     }
   }
