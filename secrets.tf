@@ -99,6 +99,15 @@ resource "aws_secretsmanager_secret" "slack" {
   recovery_window_in_days = var.secret_recovery_window_days
 }
 
+# The GitHub App's private key (PEM), created only where a caller enables var.github. Shell only, like
+# slack above: the key never enters terraform state.
+resource "aws_secretsmanager_secret" "github_app_key" {
+  for_each = var.github == null ? {} : { this = var.github }
+
+  name                    = "${var.name}/github-app-key"
+  recovery_window_in_days = var.secret_recovery_window_days
+}
+
 # auditmon's Slack webhook URL, created only where a caller enables auditmon_slack_alerts. Shell only —
 # the value is filled out-of-band (no version here), so it never enters terraform state; like the
 # hand-filled secrets above, a dependent task fails to start until the value is filled.

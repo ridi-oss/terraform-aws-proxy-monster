@@ -874,3 +874,35 @@ variable "slack" {
     error_message = "slack.locale must be en or ko."
   }
 }
+
+variable "github" {
+  type = object({
+    app_id   = string
+    identity = optional(string, "")
+  })
+  default     = null
+  description = <<-EOT
+    The control plane's GitHub App, which runs reviewed SQL files from pull requests. A non-null
+    value creates a <name>/github-app-key secret; null turns the GitHub source off. Default null.
+
+    Fill the App's private key (the PEM text) by hand into <name>/github-app-key before rolling the
+    control plane onto this; the task fails to start until it is filled. identity is
+    PM_GITHUB_IDENTITY, the ordered resolvers that map a GitHub user to a proxy-monster user; empty
+    keeps the control plane's default.
+  EOT
+}
+
+variable "ci_oidc_issuers" {
+  type        = map(string)
+  default     = {}
+  description = <<-EOT
+    CI systems whose OIDC tokens the control plane exchanges for its own, as name => issuer URL,
+    e.g. { github = "https://token.actions.githubusercontent.com" }. A token's audience must be
+    https://<console_hostname>. Empty disables the exchange.
+  EOT
+
+  validation {
+    condition     = alltrue([for name, issuer in var.ci_oidc_issuers : can(regex("^[a-z0-9][a-z0-9-]*$", name)) && startswith(issuer, "https://")])
+    error_message = "ci_oidc_issuers names must match [a-z0-9][a-z0-9-]* and issuers must be https URLs."
+  }
+}

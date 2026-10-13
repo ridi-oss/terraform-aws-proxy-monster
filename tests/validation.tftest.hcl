@@ -628,3 +628,51 @@ run "unknown_user_attribute_type_is_rejected" {
   }
   expect_failures = [var.oidc]
 }
+
+run "github_wires_app_and_ci_issuers" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    github          = { app_id = "12345" }
+    ci_oidc_issuers = { github = "https://token.actions.githubusercontent.com" }
+  }
+  assert {
+    condition = alltrue([
+      contains(local.control_plane_environment, { name = "PM_GITHUB_APP_ID", value = "12345" }),
+      contains(local.control_plane_environment, { name = "PM_CI_OIDC_ISSUERS", value = "github=https://token.actions.githubusercontent.com" }),
+      length([for e in local.control_plane_environment : e if e.name == "PM_GITHUB_IDENTITY"]) == 0,
+      length([for s in local.control_plane_secrets : s if s.name == "PM_GITHUB_APP_PRIVATE_KEY"]) == 1,
+      length(aws_secretsmanager_secret.github_app_key) == 1,
+    ])
+    error_message = "github must set the App ID, the key secret, and the CI issuers; an empty identity keeps the default."
+  }
+}
+
+run "github_off_adds_nothing" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+  }
+  assert {
+    condition = alltrue([
+      length([for e in local.control_plane_environment : e if startswith(e.name, "PM_GITHUB_") || e.name == "PM_CI_OIDC_ISSUERS"]) == 0,
+      length(aws_secretsmanager_secret.github_app_key) == 0,
+    ])
+    error_message = "Without github or ci_oidc_issuers the control plane gets no GitHub settings."
+  }
+}
+
+run "ci_oidc_issuer_must_be_https" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    ci_oidc_issuers = { github = "http://token.actions.githubusercontent.com" }
+  }
+  expect_failures = [var.ci_oidc_issuers]
+}

@@ -94,7 +94,7 @@ admits callers outside the VPC CIDR.
 | `wire-tls` | Operator, using the `wire_tls_issuance` output after the first apply |
 | `target-credentials/<ds>` (MySQL, PostgreSQL) | Bootstrap Lambda when the datasource has a `credential_group`; operator otherwise |
 | `master-credentials/<id>` | Operator, for external (non-RDS) credential groups |
-| `slack`, `alert-slack-webhook` | Operator, optional |
+| `slack`, `alert-slack-webhook`, `github-app-key` | Operator, optional |
 
 ## Target credential bootstrap
 

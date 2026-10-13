@@ -49,6 +49,13 @@ locals {
       { name = "PM_NOTIFY_STATEMENT", value = var.slack.statement },
       { name = "PM_NOTIFY_LOCALE", value = var.slack.locale },
     ],
+    var.github == null ? [] : concat(
+      [{ name = "PM_GITHUB_APP_ID", value = var.github.app_id }],
+      var.github.identity == "" ? [] : [{ name = "PM_GITHUB_IDENTITY", value = var.github.identity }],
+    ),
+    length(var.ci_oidc_issuers) == 0 ? [] : [
+      { name = "PM_CI_OIDC_ISSUERS", value = join(",", [for name, issuer in var.ci_oidc_issuers : "${name}=${issuer}"]) },
+    ],
   )
 
   control_plane_secrets = concat(
@@ -65,6 +72,9 @@ locals {
       { name = "PM_SLACK_BOT_TOKEN", valueFrom = "${one(values(aws_secretsmanager_secret.slack)[*].arn)}:bot_token::" },
       { name = "PM_SLACK_APP_TOKEN", valueFrom = "${one(values(aws_secretsmanager_secret.slack)[*].arn)}:app_token::" },
     ],
+    var.github == null ? [] : [
+      { name = "PM_GITHUB_APP_PRIVATE_KEY", valueFrom = one(values(aws_secretsmanager_secret.github_app_key)[*].arn) },
+    ],
   )
 
   control_plane_secret_arns = concat(
@@ -76,6 +86,7 @@ locals {
     ],
     var.oidc == null ? [] : [aws_secretsmanager_secret.oidc_client_secret.arn],
     var.slack == null ? [] : [one(values(aws_secretsmanager_secret.slack)[*].arn)],
+    var.github == null ? [] : [one(values(aws_secretsmanager_secret.github_app_key)[*].arn)],
   )
 
   auditmon_slack_enabled = var.auditmon_slack_alerts != null
