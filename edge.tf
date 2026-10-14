@@ -29,6 +29,7 @@ locals {
     health_port            = local.edge_health
     cert_dir               = local.edge_cert_dir
     control_plane_paths    = join(" ", local.console_control_plane_paths)
+    web_paths              = join(" ", local.console_web_paths)
     control_plane_upstream = "${module.edge_nlb[0].dns_name}:${local.edge_upstream_ports.cp-http}"
     web_upstream           = "${module.edge_nlb[0].dns_name}:${local.edge_upstream_ports.web}"
   })

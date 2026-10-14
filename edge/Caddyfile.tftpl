@@ -23,7 +23,10 @@
 
 :${https_port} {
 	tls ${cert_dir}/cert.pem ${cert_dir}/key.pem
-	@control_plane path ${control_plane_paths}
+	@control_plane {
+		path ${control_plane_paths}
+		not path ${web_paths}
+	}
 	reverse_proxy @control_plane ${control_plane_upstream}
 	reverse_proxy ${web_upstream}
 }

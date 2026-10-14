@@ -22,6 +22,8 @@ locals {
   # [/mcp]); route those to it too, else they fall through to the web default
   # and MCP auth discovery breaks.
   console_control_plane_paths = ["/api/*", "/auth/*", "/oauth/*", "/mcp*", "/.well-known/oauth-*"]
+  # Web pages under a control-plane prefix: the reauth popup lands here after login.
+  console_web_paths = ["/auth/reauth-complete"]
 }
 
 data "aws_subnet" "lb" {
@@ -111,6 +113,19 @@ module "console_alb" {
         target_group_key = "web"
       }
       rules = {
+        web-page = {
+          priority = 90
+          conditions = [{
+            path_pattern = {
+              values = local.console_web_paths
+            }
+          }]
+          actions = [{
+            forward = {
+              target_group_key = "web"
+            }
+          }]
+        }
         control-plane = {
           priority = 100
           conditions = [{

@@ -497,12 +497,29 @@ run "tailscale_edge_forwards_with_proxy_protocol_to_caddy" {
     error_message = "With edge, the tailscale node must wait for a healthy Caddy before it advertises the Service."
   }
   assert {
-    condition     = local.edge_health_checks["cp-http"].path == "/health" && strcontains(local.edge_caddyfile, "@control_plane path ${join(" ", local.console_control_plane_paths)}")
+    condition     = local.edge_health_checks["cp-http"].path == "/health" && strcontains(local.edge_caddyfile, "path ${join(" ", local.console_control_plane_paths)}") && strcontains(local.edge_caddyfile, "not path ${join(" ", local.console_web_paths)}")
     error_message = "The edge must health-check the control plane on /health and route the same paths as the console ALB."
   }
   assert {
     condition     = length(module.edge_redeploy) == 1
     error_message = "With edge, a schedule must restart the host so a renewed certificate is exported."
+  }
+}
+
+run "reauth_complete_page_goes_to_web" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+  }
+  assert {
+    condition = alltrue([
+      module.console_alb.listener_rules["https/web-page"].priority == 90,
+      module.console_alb.listener_rules["https/control-plane"].priority > 90,
+      one(module.console_alb.listener_rules["https/web-page"].condition).path_pattern[0].values == toset(["/auth/reauth-complete"]),
+    ])
+    error_message = "The console ALB must send /auth/reauth-complete to web ahead of the /auth/* control-plane rule."
   }
 }
 
