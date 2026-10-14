@@ -41,7 +41,8 @@ admits callers outside the VPC CIDR.
   pointing `console_hostname` at the `console_alb_dns_name` output is the caller's.
 - Images: `images` — one URI per component. Public images are on
   `public.ecr.aws/w1t1s2q1/pm-*`.
-- Identity: `oidc` (issuer, client id, `group_map`). `null` runs the console
+- Identity: `oidc` (issuer, client id, `group_map`, optional `user_attributes`
+  for id_token claims policies read, e.g. `manager:User`). `null` runs the console
   auth-disabled; use only for a first boot.
 - Targets: `datasources` and, for credentials the module provisions,
   `target_credential_groups`. An `athena` datasource has no target DB or

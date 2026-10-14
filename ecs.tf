@@ -42,6 +42,9 @@ locals {
       # (this unset) filters `system:*`, so an admin signs in and resolves to zero roles.
       { name = "PM_OIDC_GROUP_MAP", value = var.oidc.group_map },
     ],
+    try(var.oidc.user_attributes, "") == "" ? [] : [
+      { name = "PM_OIDC_USER_ATTRIBUTES", value = var.oidc.user_attributes },
+    ],
     var.slack == null ? [] : [
       { name = "PM_NOTIFY_STATEMENT", value = var.slack.statement },
       { name = "PM_NOTIFY_LOCALE", value = var.slack.locale },

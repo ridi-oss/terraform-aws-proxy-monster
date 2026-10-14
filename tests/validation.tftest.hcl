@@ -595,3 +595,36 @@ run "tailscale_edge_certificate_must_be_in_the_module_region" {
   }
   expect_failures = [aws_vpc_security_group_ingress_rule.edge_nlb_from_tailscale]
 }
+
+run "user_attributes_unset_emits_nothing" {
+  command = plan
+  variables {
+    datasources = { app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } } }
+    oidc        = { issuer = "https://idp.example.com", client_id = "pm", group_map = "pm-admins=system:admin" }
+  }
+  assert {
+    condition     = length([for env in module.ecs.services["control-plane"].container_definitions["control-plane"].container_definition.environment : env if env.name == "PM_OIDC_USER_ATTRIBUTES"]) == 0
+    error_message = "an unset user_attributes must not emit PM_OIDC_USER_ATTRIBUTES."
+  }
+}
+
+run "user_attributes_reach_the_control_plane" {
+  command = plan
+  variables {
+    datasources = { app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } } }
+    oidc        = { issuer = "https://idp.example.com", client_id = "pm", group_map = "pm-admins=system:admin", user_attributes = "manager:User,teams:Set<String>" }
+  }
+  assert {
+    condition     = contains([for env in module.ecs.services["control-plane"].container_definitions["control-plane"].container_definition.environment : env.value if env.name == "PM_OIDC_USER_ATTRIBUTES"], "manager:User,teams:Set<String>")
+    error_message = "user_attributes must reach the control plane as PM_OIDC_USER_ATTRIBUTES."
+  }
+}
+
+run "unknown_user_attribute_type_is_rejected" {
+  command = plan
+  variables {
+    datasources = { app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } } }
+    oidc        = { issuer = "https://idp.example.com", client_id = "pm", group_map = "pm-admins=system:admin", user_attributes = "manager:Email" }
+  }
+  expect_failures = [var.oidc]
+}

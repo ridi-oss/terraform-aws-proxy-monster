@@ -287,9 +287,10 @@ variable "name" {
 
 variable "oidc" {
   type = object({
-    issuer    = string
-    client_id = string
-    group_map = string
+    issuer          = string
+    client_id       = string
+    group_map       = string
+    user_attributes = optional(string, "")
   })
   description = <<-EOT
     OIDC SSO client for the console (the client secret is filled manually into the
@@ -302,6 +303,10 @@ variable "oidc" {
     roles, and is denied every query, with nothing in the UI explaining why. An explicit map
     is the only way an IdP group grants a system role.
     e.g. "proxy-monster-admin=system:admin,proxy-monster-developers=developers"
+
+    user_attributes copies id_token claims onto the Cedar User as "name:Type" pairs, Type one
+    of String, Long, Bool, Set<String>, User. e.g. "manager:User" lets one policy route each
+    approval to the requester's manager (resource.requester.manager == principal).
   EOT
   default     = null
 
@@ -311,6 +316,11 @@ variable "oidc" {
   validation {
     condition     = var.oidc == null || can(regex("^[^=,[:space:]]+=[^=,[:space:]]+(,[^=,[:space:]]+=[^=,[:space:]]+)*$", var.oidc.group_map))
     error_message = "oidc.group_map must be a non-empty comma-separated list of idp-group=role pairs, e.g. \"proxy-monster-admin=system:admin\". Empty parses as passthrough, which filters system:* roles and leaves SSO users with none."
+  }
+
+  validation {
+    condition     = var.oidc == null || can(regex("^$|^[A-Za-z_][A-Za-z0-9_]*:(String|Long|Bool|Set<String>|User)(,[A-Za-z_][A-Za-z0-9_]*:(String|Long|Bool|Set<String>|User))*$", var.oidc.user_attributes))
+    error_message = "oidc.user_attributes must be comma-separated name:Type pairs, Type one of String, Long, Bool, Set<String>, User, e.g. \"manager:User,department:String\"."
   }
 }
 
