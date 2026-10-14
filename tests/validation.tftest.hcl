@@ -893,3 +893,39 @@ run "omitted_enabled_keeps_slack_and_auditmon_wired" {
     error_message = "slack and auditmon_slack_alerts without enabled must stay wired."
   }
 }
+
+run "github_kms_key_signs_without_a_secret" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    github = { app_id = "12345", kms_key_arn = "arn:aws:kms:us-east-1:111111111111:key/00000000-0000-0000-0000-000000000000" }
+  }
+  assert {
+    condition = alltrue([
+      length(aws_secretsmanager_secret.github_app_key) == 0,
+      contains(local.control_plane_environment, { name = "PM_GITHUB_APP_KMS_KEY_ID", value = "arn:aws:kms:us-east-1:111111111111:key/00000000-0000-0000-0000-000000000000" }),
+      length([for s in local.control_plane_secrets : s if s.name == "PM_GITHUB_APP_PRIVATE_KEY"]) == 0,
+      local.github_kms_statements[0].actions == ["kms:Sign"],
+    ])
+    error_message = "github.kms_key_arn must sign through KMS with no key secret."
+  }
+}
+
+run "github_without_a_kms_key_keeps_its_key_secret" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    github = { app_id = "12345" }
+  }
+  assert {
+    condition = alltrue([
+      length(aws_secretsmanager_secret.github_app_key) == 1,
+      length(local.github_kms_statements) == 0,
+    ])
+    error_message = "Without kms_key_arn the key secret stays and the task role gets no kms:Sign."
+  }
+}

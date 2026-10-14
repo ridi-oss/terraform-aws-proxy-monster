@@ -112,7 +112,7 @@ admits callers outside the VPC CIDR.
 | `wire-tls` | Operator, using the `wire_tls_issuance` output after the first apply |
 | `target-credentials/<ds>` (MySQL, PostgreSQL) | Bootstrap Lambda when the datasource has a `credential_group`; operator otherwise |
 | `master-credentials/<id>` | Operator, for external (non-RDS) credential groups |
-| `slack`, `alert-slack-webhook`, `github-app-key` | Operator, optional |
+| `slack`, `alert-slack-webhook`, `github-app-key` (not with `github.kms_key_arn`) | Operator, optional |
 
 A task that reads a hand-filled secret does not start until it is filled. To fill
 one before anything reads it, apply with `enabled = false` on its input

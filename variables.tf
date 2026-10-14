@@ -929,9 +929,10 @@ variable "slack" {
 
 variable "github" {
   type = object({
-    app_id   = string
-    identity = optional(string, "")
-    enabled  = optional(bool, true)
+    app_id      = string
+    identity    = optional(string, "")
+    enabled     = optional(bool, true)
+    kms_key_arn = optional(string)
   })
   default     = null
   description = <<-EOT
@@ -943,7 +944,16 @@ variable "github" {
     PM_GITHUB_IDENTITY, the ordered resolvers that map a GitHub user to a proxy-monster user; empty
     keeps the control plane's default. enabled = false creates the secret without wiring it, so it
     can be filled before a second apply turns the App on.
+
+    kms_key_arn names an RSA_2048 SIGN_VERIFY KMS key holding the App's private key instead: no secret
+    is created, the control plane signs with kms:Sign, and its task role gets a fixed name,
+    <name>-control-plane-tasks (output control_plane_task_role_arn), for the key's policy.
   EOT
+
+  validation {
+    condition     = try(var.github.kms_key_arn, null) == null ? true : startswith(var.github.kms_key_arn, "arn:")
+    error_message = "github.kms_key_arn must be a KMS key ARN."
+  }
 }
 
 variable "ci_oidc_issuers" {

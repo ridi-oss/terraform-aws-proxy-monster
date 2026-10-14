@@ -102,7 +102,7 @@ resource "aws_secretsmanager_secret" "slack" {
 # The GitHub App's private key (PEM), created only where a caller enables var.github. Shell only, like
 # slack above: the key never enters terraform state.
 resource "aws_secretsmanager_secret" "github_app_key" {
-  for_each = var.github == null ? {} : { this = var.github }
+  for_each = var.github == null || try(var.github.kms_key_arn, null) != null ? {} : { this = var.github }
 
   name                    = "${var.name}/github-app-key"
   recovery_window_in_days = var.secret_recovery_window_days
