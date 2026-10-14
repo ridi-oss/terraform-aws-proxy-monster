@@ -140,6 +140,7 @@ variable "datasources" {
       result_prefix = string
       data_prefixes = list(string)
     }))
+    enabled = optional(bool, true)
   }))
   description = <<-EOT
     Wire proxies, one ECS service + NLB listener per datasource; key = PM_DATASOURCE_NAME.
@@ -154,6 +155,8 @@ variable "datasources" {
     "system", "rds", or a PEM file path inside the container; with verify-full, unset means
     system,rds. verify-ca checks only the chain, so it needs a PEM path to a CA that signs nothing
     but this target, never system or rds.
+    enabled = false creates the datasource's credentials secret (and lets the bootstrap fill it) without
+    its proxy service or NLB listener, so the secret, and wire-tls, can be filled before it serves.
   EOT
 
   validation {
@@ -822,6 +825,7 @@ variable "auditmon_task_size" {
 variable "auditmon_slack_alerts" {
   type = object({
     min_severity = optional(string, "warn")
+    enabled      = optional(bool, true)
   })
   default     = null
   description = <<-EOT
@@ -831,6 +835,7 @@ variable "auditmon_slack_alerts" {
 
     The webhook URL is filled by hand into the <name>/alert-slack-webhook secret; a sink with
     an empty URL makes auditmon fail closed at boot, so fill the secret before setting this.
+    enabled = false creates the secret and leaves auditmon as if this were null.
 
     min_severity is the Slack floor: "warn" forwards every rule; "critical" forwards only
     mass-export volume breaches and chain-integrity breaks.
@@ -846,6 +851,7 @@ variable "slack" {
   type = object({
     statement = optional(string, "auto")
     locale    = optional(string, "en")
+    enabled   = optional(bool, true)
   })
   default     = null
   description = <<-EOT
@@ -855,7 +861,8 @@ variable "slack" {
 
     Both tokens are filled by hand into the <name>/slack secret as a JSON object
     {"bot_token":"xoxb-…","app_token":"xapp-…"}; the control plane runs the layer inert until both
-    are present, so fill the secret before rolling the control plane onto this.
+    are present, so fill the secret before rolling the control plane onto this. enabled = false
+    creates the secret without wiring it, so it can be filled before a second apply turns it on.
 
     statement controls how much of a query's SQL an approval message shows — "omit" (metadata only),
     "auto" (the default; shown only when a disclosure hint clears it, hidden when the query's own text
@@ -879,6 +886,7 @@ variable "github" {
   type = object({
     app_id   = string
     identity = optional(string, "")
+    enabled  = optional(bool, true)
   })
   default     = null
   description = <<-EOT
@@ -888,7 +896,8 @@ variable "github" {
     Fill the App's private key (the PEM text) by hand into <name>/github-app-key before rolling the
     control plane onto this; the task fails to start until it is filled. identity is
     PM_GITHUB_IDENTITY, the ordered resolvers that map a GitHub user to a proxy-monster user; empty
-    keeps the control plane's default.
+    keeps the control plane's default. enabled = false creates the secret without wiring it, so it
+    can be filled before a second apply turns the App on.
   EOT
 }
 

@@ -61,7 +61,7 @@ module "target_credentials_key" {
         constraints = [{
           encryption_context_subset = { SecretARN = aws_secretsmanager_secret.target_credentials[key].arn }
         }]
-      }
+      } if ds.enabled
     },
   )
 

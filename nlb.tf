@@ -30,7 +30,7 @@ module "internal_nlb" {
       }
     },
     {
-      for key, ds in var.datasources : "wire/${key}" => {
+      for key, ds in local.serving_datasources : "wire/${key}" => {
         from_port   = ds.wire_port
         to_port     = ds.wire_port
         ip_protocol = "tcp"
@@ -64,7 +64,7 @@ module "internal_nlb" {
       }
     },
     {
-      for key, ds in var.datasources : "wire/${key}" => {
+      for key, ds in local.serving_datasources : "wire/${key}" => {
         port     = ds.wire_port
         protocol = "TCP"
         forward = {
@@ -119,7 +119,7 @@ module "internal_nlb" {
       # module prefix and "-wire-" are spent: a key like dev-as-prod-mysql overruns it. The wire port is
       # unique per datasource and already the thing this group routes, so it names the group — a
       # datasource key can then be as descriptive as it needs without a rename becoming a plan failure.
-      for key, ds in var.datasources : "wire/${key}" => {
+      for key, ds in local.serving_datasources : "wire/${key}" => {
         name              = "${var.name}-wire-${ds.wire_port}"
         protocol          = "TCP"
         port              = ds.wire_port

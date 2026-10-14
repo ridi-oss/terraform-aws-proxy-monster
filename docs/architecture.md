@@ -96,6 +96,12 @@ admits callers outside the VPC CIDR.
 | `master-credentials/<id>` | Operator, for external (non-RDS) credential groups |
 | `slack`, `alert-slack-webhook`, `github-app-key` | Operator, optional |
 
+A task that reads a hand-filled secret does not start until it is filled. To fill
+one before anything reads it, apply with `enabled = false` on its input
+(`github`, `slack`, `auditmon_slack_alerts`, or a `datasources` entry), fill the
+secret, then apply again without it. A datasource left disabled also gets no
+proxy, so the first apply can create the NLB that `wire-tls` names.
+
 ## Target credential bootstrap
 
 For an RDS-backed `target_credential_groups` entry:

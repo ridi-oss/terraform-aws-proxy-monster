@@ -6,6 +6,9 @@ data "aws_subnet" "private" {
 }
 
 locals {
+  slack_enabled  = var.slack != null && try(var.slack.enabled, true)
+  github_enabled = var.github != null && try(var.github.enabled, true)
+
   control_plane_environment = concat(
     [
       { name = "PM_HTTP_PORT", value = "8080" },
@@ -45,11 +48,11 @@ locals {
     try(var.oidc.user_attributes, "") == "" ? [] : [
       { name = "PM_OIDC_USER_ATTRIBUTES", value = var.oidc.user_attributes },
     ],
-    var.slack == null ? [] : [
+    !local.slack_enabled ? [] : [
       { name = "PM_NOTIFY_STATEMENT", value = var.slack.statement },
       { name = "PM_NOTIFY_LOCALE", value = var.slack.locale },
     ],
-    var.github == null ? [] : concat(
+    !local.github_enabled ? [] : concat(
       [{ name = "PM_GITHUB_APP_ID", value = var.github.app_id }],
       var.github.identity == "" ? [] : [{ name = "PM_GITHUB_IDENTITY", value = var.github.identity }],
     ),
@@ -68,11 +71,11 @@ locals {
     var.oidc == null ? [] : [
       { name = "PM_OIDC_CLIENT_SECRET", valueFrom = aws_secretsmanager_secret.oidc_client_secret.arn },
     ],
-    var.slack == null ? [] : [
+    !local.slack_enabled ? [] : [
       { name = "PM_SLACK_BOT_TOKEN", valueFrom = "${one(values(aws_secretsmanager_secret.slack)[*].arn)}:bot_token::" },
       { name = "PM_SLACK_APP_TOKEN", valueFrom = "${one(values(aws_secretsmanager_secret.slack)[*].arn)}:app_token::" },
     ],
-    var.github == null ? [] : [
+    !local.github_enabled ? [] : [
       { name = "PM_GITHUB_APP_PRIVATE_KEY", valueFrom = one(values(aws_secretsmanager_secret.github_app_key)[*].arn) },
     ],
   )
@@ -85,11 +88,11 @@ locals {
       aws_secretsmanager_secret.db_master.arn,
     ],
     var.oidc == null ? [] : [aws_secretsmanager_secret.oidc_client_secret.arn],
-    var.slack == null ? [] : [one(values(aws_secretsmanager_secret.slack)[*].arn)],
-    var.github == null ? [] : [one(values(aws_secretsmanager_secret.github_app_key)[*].arn)],
+    !local.slack_enabled ? [] : [one(values(aws_secretsmanager_secret.slack)[*].arn)],
+    !local.github_enabled ? [] : [one(values(aws_secretsmanager_secret.github_app_key)[*].arn)],
   )
 
-  auditmon_slack_enabled = var.auditmon_slack_alerts != null
+  auditmon_slack_enabled = var.auditmon_slack_alerts != null && try(var.auditmon_slack_alerts.enabled, true)
 
   # auditmon runs env-only on a missing config file, so a split between config-init's write path and
   # the monitor's read path (AUDITMON_CONFIG) would silently drop the rules and sink instead of failing.
@@ -390,7 +393,7 @@ module "ecs" {
       }
     },
     {
-      for key, ds in var.datasources : "proxy-${key}" => {
+      for key, ds in local.serving_datasources : "proxy-${key}" => {
         cpu    = 512
         memory = 1024
 

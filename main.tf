@@ -8,6 +8,8 @@ locals {
 
   sql_datasources = { for key, ds in var.datasources : key => ds if ds.engine != "athena" }
 
+  serving_datasources = { for key, ds in var.datasources : key => ds if ds.enabled }
+
   bootstrapped = { for key, ds in var.datasources : key => ds if ds.credential_group != null }
 
   bootstrap_enabled = length(local.bootstrapped) > 0

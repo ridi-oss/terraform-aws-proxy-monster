@@ -109,5 +109,5 @@ output "wire_tls_issuance" {
 
 output "wire_endpoints" {
   description = "SQL-wire endpoint per datasource (point pmon --proxy here)."
-  value       = { for key, ds in var.datasources : key => "${module.internal_nlb.dns_name}:${ds.wire_port}" }
+  value       = { for key, ds in local.serving_datasources : key => "${module.internal_nlb.dns_name}:${ds.wire_port}" }
 }

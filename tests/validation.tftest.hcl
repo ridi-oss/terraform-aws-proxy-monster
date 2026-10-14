@@ -676,3 +676,99 @@ run "ci_oidc_issuer_must_be_https" {
   }
   expect_failures = [var.ci_oidc_issuers]
 }
+
+run "disabled_github_and_slack_create_secrets_only" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    github                = { app_id = "12345", enabled = false }
+    slack                 = { enabled = false }
+    auditmon_slack_alerts = { enabled = false }
+  }
+  assert {
+    condition = alltrue([
+      length(aws_secretsmanager_secret.github_app_key) == 1,
+      length(aws_secretsmanager_secret.slack) == 1,
+      length(aws_secretsmanager_secret.alert_slack_webhook) == 1,
+      length([for e in local.control_plane_environment : e if startswith(e.name, "PM_GITHUB_") || startswith(e.name, "PM_NOTIFY_")]) == 0,
+      length([for s in local.control_plane_secrets : s if startswith(s.name, "PM_GITHUB_") || startswith(s.name, "PM_SLACK_")]) == 0,
+      length(local.control_plane_secret_arns) == 4,
+      !strcontains(local.auditmon_config_yaml, "alerts"),
+    ])
+    error_message = "enabled = false must create each secret and wire none of them."
+  }
+}
+
+run "disabled_datasource_keeps_its_secret_without_a_proxy" {
+  command = plan
+  variables {
+    datasources = {
+      app  = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+      next = { engine = "mysql", wire_port = 40002, credential_group = "app", enabled = false, target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 3306, db = "app" } }
+    }
+    bootstrap_client_host_pattern = "10.0.%"
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "mysql", database = "app", schemas = ["app"]
+      }
+    }
+  }
+  assert {
+    condition     = contains(keys(aws_secretsmanager_secret.target_credentials), "next")
+    error_message = "A disabled datasource must keep its credentials secret."
+  }
+  assert {
+    condition     = contains(keys(module.ecs.services), "proxy-app")
+    error_message = "An enabled datasource must keep its proxy."
+  }
+  assert {
+    condition     = !contains(keys(module.ecs.services), "proxy-next")
+    error_message = "A disabled datasource must get no proxy service."
+  }
+  assert {
+    condition     = [for k in keys(module.internal_nlb.target_groups) : k if startswith(k, "wire/")] == ["wire/app"]
+    error_message = "A disabled datasource must get no NLB wire target group."
+  }
+  assert {
+    condition     = keys(output.wire_endpoints) == ["app"]
+    error_message = "A disabled datasource must not appear in wire_endpoints."
+  }
+  assert {
+    condition     = contains(keys(module.target_credentials_key[0].grants), "bootstrap-write-next")
+    error_message = "The bootstrap must still be able to fill a disabled datasource's secret."
+  }
+  assert {
+    condition     = !contains(keys(module.target_credentials_key[0].grants), "proxy-read-next")
+    error_message = "A disabled datasource must get no proxy read grant."
+  }
+  assert {
+    condition     = length(local.bootstrap_config.groups["app"].serving) == 0
+    error_message = "The bootstrap must not restart a disabled datasource's proxy."
+  }
+  assert {
+    condition     = keys(local.bootstrap_config.groups["app"].datasources) == ["next"]
+    error_message = "The bootstrap must still fill a disabled datasource's secret."
+  }
+}
+
+run "omitted_enabled_keeps_slack_and_auditmon_wired" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    slack                 = {}
+    auditmon_slack_alerts = {}
+  }
+  assert {
+    condition = alltrue([
+      length([for s in local.control_plane_secrets : s if s.name == "PM_SLACK_BOT_TOKEN"]) == 1,
+      local.auditmon_slack_enabled,
+      strcontains(local.auditmon_config_yaml, "alerts"),
+    ])
+    error_message = "slack and auditmon_slack_alerts without enabled must stay wired."
+  }
+}

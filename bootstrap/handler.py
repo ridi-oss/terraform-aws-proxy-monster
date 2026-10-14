@@ -114,6 +114,8 @@ class Group:
     username: str
     host_pattern: str | None
     datasources: dict[str, str]
+    # Datasources whose proxy service exists; a disabled one gets its secret but has no service to restart.
+    serving: list[str] = field(default_factory=list)
     reader_role_arn: str | None = None
     rds_kind: str | None = None
     rds_identifier: str | None = None
@@ -1044,7 +1046,7 @@ def _restart_proxies(group: Group) -> list[str]:
     """ECS reads the secret at task start only, so rotation reaches the proxies via redeploy."""
     client = boto3.client("ecs")
     restarted = []
-    for key in sorted(group.datasources):
+    for key in sorted(k for k in group.datasources if k in group.serving):
         client.update_service(
             cluster=CONFIG.ecs_cluster,
             service=f"proxy-{key}",

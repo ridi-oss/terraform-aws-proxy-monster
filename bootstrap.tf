@@ -46,6 +46,7 @@ locals {
         datasources = {
           for key, ds in local.bootstrapped : key => ds.target.host if ds.credential_group == name
         }
+        serving = sort([for key, ds in local.bootstrapped : key if ds.credential_group == name && ds.enabled])
       }
     }
   }
