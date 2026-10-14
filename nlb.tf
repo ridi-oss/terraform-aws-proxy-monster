@@ -37,6 +37,15 @@ module "internal_nlb" {
         cidr_ipv4   = var.vpc_cidr
       }
     },
+    # The control plane forwards the console's web paths here when it serves the console on the tailnet.
+    { for key, value in {
+      web = {
+        from_port   = local.web_port
+        to_port     = local.web_port
+        ip_protocol = "tcp"
+        cidr_ipv4   = var.vpc_cidr
+      }
+    } : key => value if local.tailnet_enabled },
   )
 
   security_group_egress_rules = {
@@ -72,6 +81,15 @@ module "internal_nlb" {
         }
       }
     },
+    { for key, value in {
+      web = {
+        port     = local.web_port
+        protocol = "TCP"
+        forward = {
+          target_group_key = "web"
+        }
+      }
+    } : key => value if local.tailnet_enabled },
   )
 
   target_groups = merge(
@@ -137,5 +155,23 @@ module "internal_nlb" {
         }
       }
     },
+    { for key, value in {
+      web = {
+        name                 = "${var.name}-web-nlb"
+        protocol             = "TCP"
+        port                 = local.web_port
+        target_type          = "ip"
+        create_attachment    = false
+        deregistration_delay = 5
+        health_check = {
+          protocol            = "HTTP"
+          path                = "/"
+          matcher             = "200-399"
+          interval            = 10
+          healthy_threshold   = 2
+          unhealthy_threshold = 3
+        }
+      }
+    } : key => value if local.tailnet_enabled },
   )
 }

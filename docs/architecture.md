@@ -21,7 +21,7 @@ admits callers outside the VPC CIDR.
 |---|---|
 | `ecs.tf` | ECS cluster; services `control-plane`, `web`, `auditmon`, `proxy-<ds>` per entry of `datasources`, and `<name>-tailscale` when `tailscale` is set |
 | `alb.tf` | Console ALB, HTTPS listener on an existing ACM cert, HTTP→HTTPS redirect |
-| `nlb.tf` | Internal NLB: control-plane HTTP/gRPC and one listener per datasource wire port |
+| `nlb.tf` | Internal NLB: control-plane HTTP/gRPC, one listener per datasource wire port, and web when `tailnet` is set |
 | `edge.tf` + `edge/` | With `tailscale.edge`: a second internal NLB that admits only the Tailscale host, the Caddyfile for its sidecar, and the restart schedule |
 | `aurora.tf` | Aurora Serverless v2 PostgreSQL for the control-plane store |
 | `s3.tf` | Audit export bucket with Object Lock (`audit_lock_mode`, `audit_retention_days`) |
@@ -84,6 +84,24 @@ admits callers outside the VPC CIDR.
     `openssl_image` container decrypts the key, so the key lives only on the
     task's volume.
     `redeploy_schedule` restarts the task to pick up a renewed certificate.
+- Tailnet from the control plane (optional): `tailnet` has the control plane
+  join the tailnet itself, with no Tailscale task, sidecar or edge NLB.
+
+  ```
+  client ─▶ Service VIP ─▶ control-plane :443 ─▶ control plane, or internal NLB ─▶ web :41300
+  ```
+
+  - The control plane joins as `pmon-<instance name>` and hosts
+    `tailnet.service_name` on 443 and 80. The tailnet client's address is the
+    `requester_ip`.
+  - TLS uses the ISSUED certificate whose primary domain is `console_hostname`,
+    looked up as the ALB's is. It must have been requested with export enabled:
+    the control plane exports it at start and daily. Set `console_cert_domain`
+    to `console_hostname` to serve the same certificate on the ALB.
+  - It logs in through its own federated identity, set up like the one above but
+    with the `control_plane_task_role_arn` output as its subject; its id is
+    `tailnet.client_id`. It can host the same Service as `tailscale` while
+    clients move over.
 
 ## Secrets
 

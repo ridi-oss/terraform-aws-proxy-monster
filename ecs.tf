@@ -1,3 +1,13 @@
+# The console's own certificate, found as the ALB's is. It must have been requested with export enabled:
+# the control plane exports its key.
+data "aws_acm_certificate" "tailnet" {
+  count = local.tailnet_enabled ? 1 : 0
+
+  domain      = var.console_hostname
+  statuses    = ["ISSUED"]
+  most_recent = true
+}
+
 # Resolved from the subnet IDs the module already takes, rather than a second CIDR variable a
 # caller could let drift out of step with private_subnets.
 data "aws_subnet" "private" {
@@ -6,6 +16,20 @@ data "aws_subnet" "private" {
 }
 
 locals {
+  tailnet_enabled               = var.tailnet != null
+  web_port                      = 41300
+  control_plane_tasks_role_name = "${var.name}-control-plane-tasks"
+  control_plane_tasks_role_arn  = "arn:aws:iam::${local.aws_account_id}:role/${local.control_plane_tasks_role_name}"
+
+  # Read through the listener, so the web service registers only once the target group has a load balancer.
+  web_tailnet_load_balancer = !local.tailnet_enabled ? {} : {
+    nlb-http = {
+      target_group_arn = module.internal_nlb.listeners["web"].arn == null ? null : module.internal_nlb.target_groups["web"].arn
+      container_name   = "web"
+      container_port   = local.web_port
+    }
+  }
+
   slack_enabled  = var.slack != null && try(var.slack.enabled, true)
   github_enabled = var.github != null && try(var.github.enabled, true)
 
@@ -58,6 +82,15 @@ locals {
     ),
     length(var.ci_oidc_issuers) == 0 ? [] : [
       { name = "PM_CI_OIDC_ISSUERS", value = join(",", [for name, issuer in var.ci_oidc_issuers : "${name}=${issuer}"]) },
+    ],
+    !local.tailnet_enabled ? [] : [
+      { name = "AWS_REGION", value = local.aws_region },
+      { name = "PM_TAILNET_CLIENT_ID", value = var.tailnet.client_id },
+      { name = "PM_TAILNET_AUDIENCE", value = local.tailscale_audience },
+      { name = "PM_TAILNET_TAGS", value = var.tailnet.tag },
+      { name = "PM_TAILNET_SERVICE", value = var.tailnet.service_name },
+      { name = "PM_TAILNET_CERT_ARN", value = one(data.aws_acm_certificate.tailnet[*].arn) },
+      { name = "PM_WEB_URL", value = "http://${module.internal_nlb.dns_name}:${local.web_port}" },
     ],
   )
 
@@ -230,6 +263,38 @@ module "ecs" {
 
         task_exec_secret_arns = local.control_plane_secret_arns
 
+        # A fixed name, so the role's ARN, which the tailnet's federated identity trusts as its subject,
+        # survives a role replacement.
+        tasks_iam_role_name            = local.tailnet_enabled ? local.control_plane_tasks_role_name : null
+        tasks_iam_role_use_name_prefix = !local.tailnet_enabled
+        tasks_iam_role_statements = !local.tailnet_enabled ? null : [
+          {
+            actions   = ["sts:GetWebIdentityToken"]
+            resources = ["*"]
+            condition = [
+              {
+                test     = "ForAllValues:StringEquals"
+                variable = "sts:IdentityTokenAudience"
+                values   = [local.tailscale_audience]
+              },
+              {
+                test     = "Null"
+                variable = "sts:IdentityTokenAudience"
+                values   = ["false"]
+              },
+              {
+                test     = "NumericLessThanEquals"
+                variable = "sts:DurationSeconds"
+                values   = ["300"]
+              },
+            ]
+          },
+          {
+            actions   = ["acm:ExportCertificate"]
+            resources = [one(data.aws_acm_certificate.tailnet[*].arn)]
+          },
+        ]
+
         security_group_ingress_rules = merge(
           {
             alb-http = {
@@ -353,6 +418,14 @@ module "ecs" {
               referenced_security_group_id = try(module.edge_nlb[0].security_group_id, null)
             }
           } : key => value if local.edge_enabled },
+          { for key, value in {
+            nlb-http = {
+              from_port                    = local.web_port
+              to_port                      = local.web_port
+              ip_protocol                  = "tcp"
+              referenced_security_group_id = module.internal_nlb.security_group_id
+            }
+          } : key => value if local.tailnet_enabled },
         )
         security_group_egress_rules = {
           all = {
@@ -389,6 +462,7 @@ module "ecs" {
               container_port   = 41300
             }
           } : key => value if local.edge_enabled },
+          local.web_tailnet_load_balancer,
         )
       }
     },

@@ -43,6 +43,11 @@ output "console_url" {
   value       = "https://${var.console_hostname}"
 }
 
+output "control_plane_task_role_arn" {
+  description = "IAM role the control plane runs as; the subject of its Tailscale federated identity. null when tailnet is null."
+  value       = local.tailnet_enabled ? local.control_plane_tasks_role_arn : null
+}
+
 output "ecs_cluster_name" {
   description = "Name of the proxy-monster ECS cluster."
   value       = module.ecs.cluster_name

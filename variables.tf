@@ -783,6 +783,51 @@ variable "tailscale" {
   }
 }
 
+variable "tailnet" {
+  type = object({
+    client_id    = string
+    tag          = string
+    service_name = string
+  })
+  description = <<-EOT
+    Puts the console on the tailnet through the control plane itself, or null for none. The control
+    plane joins as an ephemeral node named pmon-<instance name> and hosts service_name on ports 443
+    and 80, so this replaces the tailscale host and its edge. Each tailnet client's own address is
+    recorded as requester_ip. It is independent of var.tailscale: both may host the same Service
+    while clients move over.
+
+    The node logs in keyless through a Tailscale federated identity (AWS outbound web identity
+    federation): its issuer is the account's STS token URL, its subject the
+    control_plane_task_role_arn output, and its scopes allow auth_keys with tag. client_id is that
+    identity's id; append ?ephemeral=true&preauthorized=true if the tailnet requires device
+    approval. The tailnet must define service_name and let tag own and auto-approve it.
+
+    TLS uses the ISSUED ACM certificate whose primary domain is console_hostname, in the module's
+    region, looked up as the ALB's is. It must have been requested with export enabled: the control
+    plane exports it at start and daily, and a certificate that cannot be exported stops it from
+    starting. Setting console_cert_domain to console_hostname serves the same certificate on the
+    ALB. Point the console_hostname DNS record at the Service VIP. The web console is reached
+    through the internal NLB, so the whole console is served on the tailnet.
+  EOT
+  default     = null
+
+  validation {
+    condition     = var.tailnet == null ? true : trimspace(var.tailnet.client_id) != ""
+    error_message = "tailnet.client_id must not be empty."
+  }
+
+  validation {
+    condition     = var.tailnet == null ? true : startswith(var.tailnet.tag, "tag:")
+    error_message = "tailnet.tag must start with tag:."
+  }
+
+  validation {
+    condition     = var.tailnet == null ? true : can(regex("^svc:[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.tailnet.service_name))
+    error_message = "tailnet.service_name must be svc: followed by a lowercase DNS label."
+  }
+
+}
+
 variable "target_credentials_key_admin_role_arns" {
   type        = list(string)
   description = <<-EOT

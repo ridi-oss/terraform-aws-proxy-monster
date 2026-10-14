@@ -613,6 +613,98 @@ run "tailscale_edge_certificate_must_be_in_the_module_region" {
   expect_failures = [aws_vpc_security_group_ingress_rule.edge_nlb_from_tailscale]
 }
 
+run "tailnet_null_adds_nothing" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+  }
+  assert {
+    condition = alltrue([
+      length([for e in local.control_plane_environment : e if startswith(e.name, "PM_TAILNET_") || e.name == "PM_WEB_URL"]) == 0,
+      !contains(keys(module.internal_nlb.listeners), "web"),
+      output.control_plane_task_role_arn == null,
+      length(data.aws_acm_certificate.tailnet) == 0,
+    ])
+    error_message = "A null tailnet must leave the control plane, the internal NLB and the outputs as they were."
+  }
+}
+
+run "tailnet_serves_the_console_from_the_control_plane" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailnet = {
+      client_id    = "example-client-id"
+      tag          = "tag:pm-console-host"
+      service_name = "svc:pm-console"
+    }
+  }
+  assert {
+    condition = alltrue([
+      contains(local.control_plane_environment, { name = "AWS_REGION", value = "us-east-1" }),
+      contains(local.control_plane_environment, { name = "PM_TAILNET_CLIENT_ID", value = "example-client-id" }),
+      contains(local.control_plane_environment, { name = "PM_TAILNET_AUDIENCE", value = "tailscale.workload.identity" }),
+      contains(local.control_plane_environment, { name = "PM_TAILNET_TAGS", value = "tag:pm-console-host" }),
+      contains(local.control_plane_environment, { name = "PM_TAILNET_SERVICE", value = "svc:pm-console" }),
+      data.aws_acm_certificate.tailnet[0].domain == var.console_hostname,
+      contains(local.control_plane_environment, { name = "PM_TAILNET_CERT_ARN", value = data.aws_acm_certificate.tailnet[0].arn }),
+      contains([for e in local.control_plane_environment : e.name], "PM_WEB_URL"),
+    ])
+    error_message = "The control plane must log in with client_id, advertise its tag, host the Service with the certificate, and forward web paths to web."
+  }
+  assert {
+    condition = alltrue([
+      contains(keys(module.internal_nlb.listeners), "web"),
+      local.web_tailnet_load_balancer["nlb-http"].container_name == "web",
+      local.web_tailnet_load_balancer["nlb-http"].container_port == 41300,
+      module.internal_nlb.target_groups["web"].port == 41300,
+    ])
+    error_message = "The web service must register on the internal NLB's web listener, which the control plane forwards to."
+  }
+  assert {
+    condition     = module.ecs.services["control-plane"].tasks_iam_role_name == "proxy-monster-control-plane-tasks" && output.control_plane_task_role_arn == "arn:aws:iam::111111111111:role/proxy-monster-control-plane-tasks"
+    error_message = "The role ARN must be known at plan time so a caller can trust it before the role exists."
+  }
+  assert {
+    condition     = !contains(keys(module.ecs.services), "proxy-monster-tailscale")
+    error_message = "tailnet must not add the tailscale host service."
+  }
+}
+
+run "tailnet_tag_must_be_a_tag" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailnet = {
+      client_id    = "example-client-id"
+      tag          = "pm-console-host"
+      service_name = "svc:pm-console"
+    }
+  }
+  expect_failures = [var.tailnet]
+}
+
+run "tailnet_service_name_must_be_a_dns_label" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailnet = {
+      client_id    = "example-client-id"
+      tag          = "tag:pm-console-host"
+      service_name = "pm-console"
+    }
+  }
+  expect_failures = [var.tailnet]
+}
+
 run "user_attributes_unset_emits_nothing" {
   command = plan
   variables {
