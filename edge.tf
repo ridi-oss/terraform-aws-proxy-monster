@@ -108,7 +108,7 @@ resource "aws_vpc_security_group_ingress_rule" "edge_nlb_from_tailscale" {
 
 module "edge_redeploy" {
   source  = "terraform-aws-modules/eventbridge/aws"
-  version = "~> 3.13"
+  version = "~> 4.3"
 
   count = local.edge_enabled ? 1 : 0
 
