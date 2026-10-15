@@ -897,6 +897,11 @@ variable "slack" {
     statement = optional(string, "auto")
     locale    = optional(string, "en")
     enabled   = optional(bool, true)
+    channels = optional(list(object({
+      tag     = string
+      channel = string
+    })), [])
+    mode = optional(string)
   })
   default     = null
   description = <<-EOT
@@ -914,6 +919,12 @@ variable "slack" {
     carries a protected literal), or "full" (shown to pending approvers, then hidden once the task is
     handled if the hint flags it). A statement's literals can be the very values a policy protects, so
     "omit" is the conservative floor. locale is the notification language, "en" or "ko".
+
+    channels routes a request to a Slack channel by its datasource's tags: the first route whose tag
+    the datasource carries picks the channel, so list specific tags before a broad one such as
+    system:production. A request with no datasource goes to the first route. channel is a channel ID (C…), and the bot must be a member. Empty (the default) sends DMs
+    only. mode is "both" (the server's default: post to the channel and DM) or "channel" (post to
+    the channel only); a request no route matches is always sent as DMs.
   EOT
 
   validation {
@@ -924,6 +935,23 @@ variable "slack" {
   validation {
     condition     = var.slack == null ? true : contains(["en", "ko"], var.slack.locale)
     error_message = "slack.locale must be en or ko."
+  }
+
+  validation {
+    condition = var.slack == null ? true : alltrue([
+      for r in var.slack.channels : trimspace(r.tag) != "" && !strcontains(r.tag, ",") && can(regex("^[CG][A-Z0-9]+$", r.channel))
+    ])
+    error_message = "slack.channels entries need a tag without commas and a Slack channel ID (C…)."
+  }
+
+  validation {
+    condition     = var.slack == null ? true : length(distinct([for r in var.slack.channels : trimspace(r.tag)])) == length(var.slack.channels)
+    error_message = "slack.channels lists a tag twice."
+  }
+
+  validation {
+    condition     = var.slack == null ? true : var.slack.mode == null ? true : contains(["both", "channel"], var.slack.mode)
+    error_message = "slack.mode must be both or channel."
   }
 }
 

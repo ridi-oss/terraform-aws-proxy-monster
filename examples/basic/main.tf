@@ -36,6 +36,11 @@ module "proxy_monster" {
   }
 
   audit_bucket_name = "example-proxy-monster-audit"
+
+  # Tokens go into the <name>/slack secret by hand; requests on production datasources post to the channel.
+  slack = {
+    channels = [{ tag = "system:production", channel = "C0123ABC" }]
+  }
 }
 
 output "console_url" {

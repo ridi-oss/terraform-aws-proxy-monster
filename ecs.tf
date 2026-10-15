@@ -84,10 +84,16 @@ locals {
     try(var.oidc.user_attributes, "") == "" ? [] : [
       { name = "PM_OIDC_USER_ATTRIBUTES", value = var.oidc.user_attributes },
     ],
-    !local.slack_enabled ? [] : [
-      { name = "PM_NOTIFY_STATEMENT", value = var.slack.statement },
-      { name = "PM_NOTIFY_LOCALE", value = var.slack.locale },
-    ],
+    !local.slack_enabled ? [] : concat(
+      [
+        { name = "PM_NOTIFY_STATEMENT", value = var.slack.statement },
+        { name = "PM_NOTIFY_LOCALE", value = var.slack.locale },
+      ],
+      length(var.slack.channels) == 0 ? [] : [
+        { name = "PM_SLACK_CHANNELS", value = join(",", [for r in var.slack.channels : "${r.tag}=${r.channel}"]) },
+      ],
+      var.slack.mode == null ? [] : [{ name = "PM_SLACK_MODE", value = var.slack.mode }],
+    ),
     !local.github_enabled ? [] : concat(
       [{ name = "PM_GITHUB_APP_ID", value = var.github.app_id }],
       var.github.identity == "" ? [] : [{ name = "PM_GITHUB_IDENTITY", value = var.github.identity }],
