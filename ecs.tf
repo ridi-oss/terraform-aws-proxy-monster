@@ -263,10 +263,9 @@ module "ecs" {
 
         task_exec_secret_arns = local.control_plane_secret_arns
 
-        # A fixed name, so the role's ARN, which the tailnet's federated identity trusts as its subject,
-        # survives a role replacement.
-        tasks_iam_role_name            = local.tailnet_enabled ? local.control_plane_tasks_role_name : null
-        tasks_iam_role_use_name_prefix = !local.tailnet_enabled
+        # A fixed name, so policies outside this module that name the role's ARN survive a role replacement.
+        tasks_iam_role_name            = local.control_plane_tasks_role_name
+        tasks_iam_role_use_name_prefix = false
         tasks_iam_role_statements = !local.tailnet_enabled ? null : [
           {
             actions   = ["sts:GetWebIdentityToken"]

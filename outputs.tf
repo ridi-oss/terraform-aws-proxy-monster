@@ -44,8 +44,8 @@ output "console_url" {
 }
 
 output "control_plane_task_role_arn" {
-  description = "IAM role the control plane runs as; the subject of its Tailscale federated identity. null when tailnet is null."
-  value       = local.tailnet_enabled ? local.control_plane_tasks_role_arn : null
+  description = "IAM role the control plane runs as, for a policy outside this module to name (a Tailscale federated identity, a KMS key policy)."
+  value       = local.control_plane_tasks_role_arn
 }
 
 output "ecs_cluster_name" {

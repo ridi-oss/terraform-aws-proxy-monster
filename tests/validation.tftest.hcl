@@ -624,10 +624,22 @@ run "tailnet_null_adds_nothing" {
     condition = alltrue([
       length([for e in local.control_plane_environment : e if startswith(e.name, "PM_TAILNET_") || e.name == "PM_WEB_URL"]) == 0,
       !contains(keys(module.internal_nlb.listeners), "web"),
-      output.control_plane_task_role_arn == null,
       length(data.aws_acm_certificate.tailnet) == 0,
     ])
     error_message = "A null tailnet must leave the control plane, the internal NLB and the outputs as they were."
+  }
+}
+
+run "control_plane_task_role_has_a_fixed_name" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+  }
+  assert {
+    condition     = module.ecs.services["control-plane"].tasks_iam_role_name == "proxy-monster-control-plane-tasks" && output.control_plane_task_role_arn == "arn:aws:iam::111111111111:role/proxy-monster-control-plane-tasks"
+    error_message = "The control-plane task role must keep its fixed name with no tailnet."
   }
 }
 
