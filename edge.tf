@@ -1,6 +1,7 @@
 locals {
   tailscale_edge  = try(var.tailscale.edge, null)
   edge_enabled    = local.tailscale_edge != null
+  edge_task_size  = coalesce(var.edge_task_size, local.edge_enabled ? { cpu = 512, memory = 1024 } : { cpu = 256, memory = 512 })
   edge_cert_dir   = "/certs"
   edge_https_port = 8443
   edge_http_port  = 8880

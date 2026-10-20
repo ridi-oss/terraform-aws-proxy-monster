@@ -889,6 +889,39 @@ variable "auditmon_task_size" {
   EOT
 }
 
+variable "web_task_size" {
+  type = object({
+    cpu    = number
+    memory = number
+  })
+  default = {
+    cpu    = 512
+    memory = 1024
+  }
+  description = "Fargate task size for the web console service. Default 512 / 1024; keep to a documented Fargate cpu/memory pair."
+}
+
+variable "proxy_task_size" {
+  type = object({
+    cpu    = number
+    memory = number
+  })
+  default = {
+    cpu    = 512
+    memory = 1024
+  }
+  description = "Fargate task size for each wire proxy service. Default 512 / 1024; keep to a documented Fargate cpu/memory pair."
+}
+
+variable "edge_task_size" {
+  type = object({
+    cpu    = number
+    memory = number
+  })
+  default     = null
+  description = "Fargate task size for the tailnet edge service. Default (null) is 512 / 1024 with the TLS edge, 256 / 512 without; keep to a documented Fargate cpu/memory pair."
+}
+
 variable "auditmon_slack_alerts" {
   type = object({
     min_severity = optional(string, "warn")
