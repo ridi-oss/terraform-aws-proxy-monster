@@ -425,7 +425,7 @@ module "ecs" {
             ]
 
             environment = [
-              { name = "PM_PROXY_TARGET", value = "http://${module.internal_nlb.dns_name}:8080" },
+              { name = "PM_CP_URL", value = "http://${module.internal_nlb.dns_name}:8080" },
             ]
 
             enable_cloudwatch_logging = true
