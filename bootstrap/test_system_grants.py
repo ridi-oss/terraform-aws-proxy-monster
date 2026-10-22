@@ -205,6 +205,49 @@ class SystemGrantsTest(unittest.TestCase):
                     make_group(drop_tables=[table]), bootstrap.Secret("test-password")
                 )
 
+    def test_performance_schema_table_takes_drop_alongside_its_select(self):
+        table = "performance_schema.events_statements_summary_by_digest"
+        group = make_group(system_schemas=["performance_schema"], drop_tables=[table])
+        bootstrap._validate(group, bootstrap.Secret("test-password"))
+        statements = self.provision_statements(group, tables=[table])
+        self.assertIn(
+            r"GRANT SELECT ON `performance\_schema`.* TO 'pmproxy_rw'@'10.25.%'",
+            statements,
+        )
+        self.assertIn(
+            "GRANT DROP ON `performance_schema`.`events_statements_summary_by_digest`"
+            " TO 'pmproxy_rw'@'10.25.%'",
+            statements,
+        )
+
+    def test_system_table_drop_is_rejected_beyond_a_named_performance_schema_table(
+        self,
+    ):
+        for system_schemas, table in [
+            ([], "performance_schema.events_statements_summary_by_digest"),
+            (["performance_schema"], "performance_schema.events_statements_*"),
+            (
+                ["performance_schema"],
+                "PERFORMANCE_SCHEMA.events_statements_summary_by_digest",
+            ),
+            (["performance_schema"], "performance_schema.setup_actors"),
+            (["performance_schema"], "performance_schema.host_cache"),
+            (
+                ["performance_schema"],
+                "performance_schema.events_statements_histogram_by_digest",
+            ),
+            (["mysql"], "mysql.user"),
+            (["sys"], "sys.sys_config"),
+        ]:
+            with (
+                self.subTest(table=table, system_schemas=system_schemas),
+                self.assertRaisesRegex(bootstrap.BootstrapError, "drop table"),
+            ):
+                bootstrap._validate(
+                    make_group(system_schemas=system_schemas, drop_tables=[table]),
+                    bootstrap.Secret("test-password"),
+                )
+
     def test_drop_tables_resolve_before_password_change(self):
         statements = self.provision_statements(
             make_group(system_schemas=[], drop_tables=["app.t"]), tables=["app.t"]
