@@ -53,6 +53,9 @@ admits callers outside the VPC CIDR.
   `data_prefixes`, and a table deny does not hide the table from
   `ListTableMetadata`. The proxy reads every database's tables at boot and
   fails its catalog on the first error, so a database deny stops every query.
+  The deny lives in its own managed policies, at most 40 resources each and
+  attached to the proxy's task role, so a long list stays under the
+  6,144-character managed policy limit.
   `athena.lake_formation` adds the
   `lakeformation:GetDataAccess` that Lake Formation-registered locations need,
   and Lake Formation then decides what those locations expose, even outside

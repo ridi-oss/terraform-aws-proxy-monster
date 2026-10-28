@@ -17,18 +17,20 @@ data "aws_subnet" "private" {
 
 locals {
   athena_glue_guard_statements = {
-    for key, ds in var.datasources : key => concat(
-      !ds.athena.lake_formation ? [] : [{
-        actions   = ["lakeformation:GetDataAccess"]
-        resources = ["*"]
-      }],
-      length(ds.athena.denied_glue_resources) == 0 ? [] : [{
-        effect    = "Deny"
-        actions   = ["glue:*"]
-        resources = [for resource in ds.athena.denied_glue_resources : "arn:aws:glue:${local.aws_region}:${local.aws_account_id}:${resource}"]
-      }],
-    ) if ds.engine == "athena"
+    for key, ds in var.datasources : key => !ds.athena.lake_formation ? [] : [{
+      actions   = ["lakeformation:GetDataAccess"]
+      resources = ["*"]
+    }] if ds.engine == "athena"
   }
+
+  athena_glue_deny_policies = merge([
+    for key, ds in local.serving_datasources : {
+      for index, resources in chunklist(sort(distinct(ds.athena.denied_glue_resources)), 40) : "${key}/${index}" => {
+        service   = "proxy-${key}"
+        resources = [for resource in resources : "arn:aws:glue:${local.aws_region}:${local.aws_account_id}:${resource}"]
+      }
+    } if ds.engine == "athena"
+  ]...)
 
   tailnet_enabled               = var.tailnet != null
   web_port                      = 41300
@@ -430,7 +432,7 @@ module "ecs" {
             ]
 
             environment = [
-              { name = "PM_PROXY_TARGET", value = "http://${module.internal_nlb.dns_name}:8080" },
+              { name = "PM_CP_URL", value = "http://${module.internal_nlb.dns_name}:8080" },
             ]
 
             enable_cloudwatch_logging = true
@@ -1093,4 +1095,29 @@ module "ecs" {
       }
     },
   )
+}
+
+data "aws_iam_policy_document" "athena_glue_deny" {
+  for_each = local.athena_glue_deny_policies
+
+  statement {
+    effect    = "Deny"
+    actions   = ["glue:*"]
+    resources = each.value.resources
+  }
+}
+
+resource "aws_iam_policy" "athena_glue_deny" {
+  for_each = local.athena_glue_deny_policies
+
+  name_prefix = "${var.name}-${each.value.service}-glue-deny-"
+  description = "Glue resources the ${each.value.service} task role may not use"
+  policy      = data.aws_iam_policy_document.athena_glue_deny[each.key].json
+}
+
+resource "aws_iam_role_policy_attachment" "athena_glue_deny" {
+  for_each = local.athena_glue_deny_policies
+
+  role       = module.ecs.services[each.value.service].tasks_iam_role_name
+  policy_arn = aws_iam_policy.athena_glue_deny[each.key].arn
 }
