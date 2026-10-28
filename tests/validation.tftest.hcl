@@ -148,6 +148,95 @@ run "mysql_group_needs_host_pattern" {
   expect_failures = [var.bootstrap_client_host_pattern]
 }
 
+run "performance_schema_drop_table_is_accepted" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, credential_group = "app", target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 3306, db = "app" } }
+    }
+    bootstrap_client_host_pattern = "10.0.%"
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "mysql", database = "app", schemas = ["app"], system_schemas = ["performance_schema"]
+        drop_tables    = ["performance_schema.events_statements_summary_by_digest"]
+      }
+    }
+  }
+}
+
+run "performance_schema_drop_table_needs_its_system_schema" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, credential_group = "app", target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 3306, db = "app" } }
+    }
+    bootstrap_client_host_pattern = "10.0.%"
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "mysql", database = "app", schemas = ["app"]
+        drop_tables    = ["performance_schema.events_statements_summary_by_digest"]
+      }
+    }
+  }
+  expect_failures = [var.target_credential_groups]
+}
+
+run "performance_schema_drop_glob_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, credential_group = "app", target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 3306, db = "app" } }
+    }
+    bootstrap_client_host_pattern = "10.0.%"
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "mysql", database = "app", schemas = ["app"], system_schemas = ["performance_schema"]
+        drop_tables    = ["performance_schema.events_statements_*"]
+      }
+    }
+  }
+  expect_failures = [var.target_credential_groups]
+}
+
+run "performance_schema_setup_table_drop_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, credential_group = "app", target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 3306, db = "app" } }
+    }
+    bootstrap_client_host_pattern = "10.0.%"
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "mysql", database = "app", schemas = ["app"], system_schemas = ["performance_schema"]
+        drop_tables    = ["performance_schema.setup_actors"]
+      }
+    }
+  }
+  expect_failures = [var.target_credential_groups]
+}
+
+run "mysql_system_table_drop_is_rejected" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, credential_group = "app", target = { host = "app.cluster-x.us-east-1.rds.amazonaws.com", port = 3306, db = "app" } }
+    }
+    bootstrap_client_host_pattern = "10.0.%"
+    target_credential_groups = {
+      app = {
+        aws_account_id = "222222222222", aws_account_alias = "data", rds_kind = "cluster", rds_identifier = "app"
+        engine         = "mysql", database = "app", schemas = ["app"], system_schemas = ["mysql"]
+        drop_tables    = ["mysql.user"]
+      }
+    }
+  }
+  expect_failures = [var.target_credential_groups]
+}
+
 run "postgres_role_create_needs_postgres_role" {
   command = plan
   variables {
@@ -310,19 +399,76 @@ run "athena_denied_glue_resources_plan" {
     }
   }
   assert {
-    condition = local.athena_glue_guard_statements["dw"] == [
-      { actions = ["lakeformation:GetDataAccess"], resources = ["*"] },
-      {
-        effect  = "Deny"
-        actions = ["glue:*"]
+    condition     = jsonencode(local.athena_glue_guard_statements["dw"]) == jsonencode([{ actions = ["lakeformation:GetDataAccess"], resources = ["*"] }])
+    error_message = "lake_formation must add a GetDataAccess allow to the task role policy, and the Glue deny must stay out of it."
+  }
+  assert {
+    condition = local.athena_glue_deny_policies == {
+      "dw/0" = {
+        service = "proxy-dw"
         resources = [
           "arn:aws:glue:us-east-1:111111111111:database/scratch",
-          "arn:aws:glue:us-east-1:111111111111:table/logs/signin_*",
           "arn:aws:glue:us-east-1:111111111111:table/*/email_sent",
+          "arn:aws:glue:us-east-1:111111111111:table/logs/signin_*",
         ]
-      },
-    ]
-    error_message = "lake_formation and denied_glue_resources must add a GetDataAccess allow and a glue:* Deny on the listed ARNs in this account and region."
+      }
+    }
+    error_message = "denied_glue_resources must become a separate glue:* Deny policy on the listed ARNs in this account and region."
+  }
+  assert {
+    condition     = keys(aws_iam_role_policy_attachment.athena_glue_deny) == ["dw/0"]
+    error_message = "The Glue deny policy must be attached to the proxy task role."
+  }
+}
+
+run "athena_denied_glue_resources_split_into_policies_of_forty" {
+  command = plan
+  variables {
+    datasources = {
+      dw = {
+        engine    = "athena"
+        wire_port = 40002
+        athena = {
+          workgroup             = "primary"
+          database              = "logs"
+          result_prefix         = "results-bucket/athena/"
+          data_prefixes         = ["data-bucket/warehouse/"]
+          denied_glue_resources = concat([for i in range(41) : format("table/logs/t%02d", i)], ["table/logs/t00"])
+        }
+      }
+    }
+  }
+  assert {
+    condition     = keys(local.athena_glue_deny_policies) == ["dw/0", "dw/1"]
+    error_message = "41 distinct denied resources must split into two policies."
+  }
+  assert {
+    condition     = length(local.athena_glue_deny_policies["dw/0"].resources) == 40 && local.athena_glue_deny_policies["dw/1"].resources == ["arn:aws:glue:us-east-1:111111111111:table/logs/t40"]
+    error_message = "Each policy must hold at most 40 resources, sorted and without duplicates."
+  }
+}
+
+run "disabled_athena_datasource_gets_no_glue_deny_policy" {
+  command = plan
+  variables {
+    datasources = {
+      dw = {
+        engine    = "athena"
+        wire_port = 40002
+        enabled   = false
+        athena = {
+          workgroup             = "primary"
+          database              = "logs"
+          result_prefix         = "results-bucket/athena/"
+          data_prefixes         = ["data-bucket/warehouse/"]
+          denied_glue_resources = ["database/scratch"]
+        }
+      }
+    }
+  }
+  assert {
+    condition     = local.athena_glue_deny_policies == {}
+    error_message = "A datasource without a proxy service has no task role to attach a deny policy to."
   }
 }
 
@@ -338,8 +484,8 @@ run "athena_without_glue_guards_adds_no_statements" {
     }
   }
   assert {
-    condition     = local.athena_glue_guard_statements["dw"] == []
-    error_message = "With neither lake_formation nor denied_glue_resources set, no Lake Formation or Deny statement is added."
+    condition     = length(local.athena_glue_guard_statements["dw"]) == 0 && local.athena_glue_deny_policies == {}
+    error_message = "With neither lake_formation nor denied_glue_resources set, no Lake Formation statement or Deny policy is added."
   }
 }
 

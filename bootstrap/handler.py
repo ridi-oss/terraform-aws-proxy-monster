@@ -41,6 +41,10 @@ SYSTEM_ROUTINES = frozenset({"mysql.rds_kill", "mysql.rds_kill_query"})
 DROP_TABLE = re.compile(
     r"\A[A-Za-z0-9_]{1,64}\.(?=[A-Za-z0-9_*]*[A-Za-z0-9_])[A-Za-z0-9_*]{1,64}\Z"
 )
+# Emptying host_cache or a setup_ table changes server behavior; summaries and history do not.
+PERFORMANCE_SCHEMA_DROP_TABLE = re.compile(
+    r"\Aevents_[a-z_]+_(summary_[a-z_]+|history(_long)?)\Z"
+)
 
 # Columns are named, never *: these relations also hold authentication_string and rolpassword.
 MYSQL_USERS_SQL = (
@@ -418,9 +422,19 @@ def _validate(group: Group, password: Secret) -> None:
         if privilege not in GLOBAL_PRIVILEGES:
             raise BootstrapError("group global privilege is not grantable ON *.*")
     for table in group.drop_tables:
-        if not DROP_TABLE.match(table) or table.partition(".")[0] not in group.schemas:
+        schema, _, name = table.partition(".")
+        # TRUNCATE there needs DROP.
+        named_performance_schema_table = (
+            schema == "performance_schema"
+            and schema in group.system_schemas
+            and PERFORMANCE_SCHEMA_DROP_TABLE.match(name)
+        )
+        if not DROP_TABLE.match(table) or not (
+            schema in group.schemas or named_performance_schema_table
+        ):
             raise BootstrapError(
                 "group drop table is not schema.table within the group's schemas"
+                " or a named performance_schema table it reads"
             )
     if group.engine != "mysql" and (
         group.system_schemas
