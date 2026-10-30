@@ -47,9 +47,20 @@ PERFORMANCE_SCHEMA_DROP_TABLE = re.compile(
 )
 
 # Columns are named, never *: these relations also hold authentication_string and rolpassword.
-MYSQL_USERS_SQL = "SELECT User, Host FROM mysql.user ORDER BY User, Host"
+MYSQL_USERS_SQL = (
+    "SELECT u.User, u.Host, u.account_locked, u.password_expired, u.password_last_changed,"
+    " u.Grant_priv,"
+    " (SELECT GROUP_CONCAT(d.Db ORDER BY d.Db SEPARATOR ',') FROM mysql.db d"
+    "  WHERE d.User = u.User AND d.Host = u.Host AND d.Grant_priv = 'Y')"
+    " FROM mysql.user u ORDER BY u.User, u.Host"
+)
+MYSQL_ROLE_EDGES_SQL = (
+    "SELECT TO_USER, TO_HOST, FROM_USER, FROM_HOST, WITH_ADMIN_OPTION FROM mysql.role_edges"
+)
+MYSQL_NO_SUCH_TABLE = 1146
 POSTGRES_USERS_SQL = (
-    "SELECT rolname FROM pg_catalog.pg_roles WHERE rolcanlogin ORDER BY rolname"
+    "SELECT rolname, rolsuper, rolcreaterole, rolcreatedb, rolvaliduntil"
+    " FROM pg_catalog.pg_roles WHERE rolcanlogin ORDER BY rolname"
 )
 # Every role a schema-wide GRANT has to speak for: the schema's own owner, plus the owner of each
 # relation ON ALL TABLES expands to (tables, views, matviews, foreign and partitioned tables).
@@ -315,7 +326,15 @@ def _read_users(
                 connection.cursor() as cursor,
             ):
                 cursor.execute(MYSQL_USERS_SQL)
-                return [{"user": row[0], "host": row[1]} for row in cursor.fetchall()]
+                users = cursor.fetchall()
+                try:
+                    cursor.execute(MYSQL_ROLE_EDGES_SQL)
+                    edges = cursor.fetchall()
+                except pymysql.err.ProgrammingError as exc:
+                    if exc.args[0] != MYSQL_NO_SUCH_TABLE:
+                        raise
+                    edges = None
+                return _mysql_user_rows(users, edges)
         case "postgres":
             with pg8000.dbapi.connect(
                 host=endpoint,
@@ -328,9 +347,40 @@ def _read_users(
             ) as connection:
                 cursor = connection.cursor()
                 cursor.execute(POSTGRES_USERS_SQL)
-                return [{"user": row[0], "host": None} for row in cursor.fetchall()]
+                return [
+                    {
+                        "user": row[0],
+                        "host": None,
+                        "superuser": row[1],
+                        "create_role": row[2],
+                        "create_db": row[3],
+                        "valid_until": None if row[4] is None else str(row[4]),
+                    }
+                    for row in cursor.fetchall()
+                ]
         case engine:
             raise BootstrapError(f"unknown engine {engine!r}")
+
+
+def _mysql_user_rows(users: Any, edges: Any | None) -> list[dict[str, Any]]:
+    roles: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for to_user, to_host, from_user, from_host, admin in edges or ():
+        roles.setdefault((to_user, to_host), []).append(
+            {"role": f"{from_user}@{from_host}", "admin_option": admin == "Y"}
+        )
+    return [
+        {
+            "user": user,
+            "host": host,
+            "locked": locked == "Y",
+            "password_expired": expired == "Y",
+            "password_last_changed": None if changed is None else str(changed),
+            "grant_option": grant == "Y",
+            "grant_option_schemas": schemas.split(",") if schemas else [],
+            "roles": None if edges is None else roles.get((user, host), []),
+        }
+        for user, host, locked, expired, changed, grant, schemas in users
+    ]
 
 
 def _validate(group: Group, password: Secret) -> None:
