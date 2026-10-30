@@ -752,6 +752,7 @@ variable "tailscale" {
       cli_image         = string
       openssl_image     = string
       redeploy_schedule = optional(string, "rate(30 days)")
+      wire              = optional(bool, false)
     }))
   })
   description = <<-EOT
@@ -782,6 +783,15 @@ variable "tailscale" {
     redeploy_schedule restarts the task so a renewed certificate is picked up. ACM charges for an
     exportable certificate at issuance and at each renewal. caddy_image, cli_image, and
     openssl_image must be digest-pinned.
+
+    edge.wire, when true, also advertises every enabled datasource's wire_port on the Service.
+    The host forwards each with PROXY protocol v2 through the edge NLB to a second proxy port,
+    16033, which the proxy opens with PM_PROXY_PROTOCOL_PORT and trusts only from the edge NLB's
+    own addresses, so another task cannot forge a header even through an extra security group
+    that admits it. Each proxy then records the tailnet client's own
+    address as client_addr. The proxy image must be proxy-monster server 0.1.33 or later, and
+    the Service must expose every wire_port. PM_ADVERTISE_ADDR still names the internal NLB, so
+    pmon reaches the Service only where that name resolves to the Service VIP.
   EOT
   default     = null
 
@@ -813,6 +823,11 @@ variable "tailscale" {
   validation {
     condition     = try(var.tailscale.edge, null) == null ? true : alltrue([for image in [var.tailscale.edge.caddy_image, var.tailscale.edge.cli_image, var.tailscale.edge.openssl_image] : strcontains(image, "@sha256:")])
     error_message = "tailscale.edge.caddy_image, cli_image, and openssl_image must be pinned by digest (image@sha256:...)."
+  }
+
+  validation {
+    condition     = !try(var.tailscale.edge.wire, false) ? true : alltrue([for ds in var.datasources : ds.wire_port != 16033])
+    error_message = "With tailscale.edge.wire, no datasource may use wire_port 16033: the proxy opens its PROXY protocol port there."
   }
 }
 

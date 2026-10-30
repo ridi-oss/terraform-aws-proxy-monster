@@ -22,7 +22,7 @@ admits callers outside the VPC CIDR.
 | `ecs.tf` | ECS cluster; services `control-plane`, `web`, `auditmon`, `proxy-<ds>` per entry of `datasources`, and `<name>-tailscale` when `tailscale` is set |
 | `alb.tf` | Console ALB, HTTPS listener on an existing ACM cert, HTTP→HTTPS redirect |
 | `nlb.tf` | Internal NLB: control-plane HTTP/gRPC, one listener per datasource wire port, and web when `tailnet` is set |
-| `edge.tf` + `edge/` | With `tailscale.edge`: a second internal NLB that admits only the Tailscale host, the Caddyfile for its sidecar, and the restart schedule |
+| `edge.tf` + `edge/` | With `tailscale.edge`: a second internal NLB that admits only the Tailscale host (plus one listener per wire port with `edge.wire`), the Caddyfile for its sidecar, and the restart schedule |
 | `aurora.tf` | Aurora Serverless v2 PostgreSQL for the control-plane store |
 | `s3.tf` | Audit export bucket with Object Lock (`audit_lock_mode`, `audit_retention_days`) |
 | `kms.tf` | Keys: audit signer, target credentials, one `rds-admin/<alias>` per target account |
@@ -96,6 +96,24 @@ admits callers outside the VPC CIDR.
     `openssl_image` container decrypts the key, so the key lives only on the
     task's volume.
     `redeploy_schedule` restarts the task to pick up a renewed certificate.
+- Wire client address (optional): `tailscale.edge.wire` carries each enabled
+  datasource's wire port on the same Service.
+
+  ```
+  client ─▶ Service VIP :<wire_port> ─▶ tailscale ─(PROXY v2)─▶ edge NLB :<wire_port> ─▶ proxy :16033
+  ```
+
+  - The proxy opens `PM_PROXY_PROTOCOL_PORT` 16033 beside its wire port and
+    takes the client address from the PROXY header there. `PM_TRUSTED_PROXIES`
+    is the edge NLB's own private addresses, one per subnet, so a task that an
+    extra security group lets reach 16033 still cannot forge a header. The
+    module's own rule admits 16033 only from the edge NLB, which admits only the
+    node.
+  - The edge target groups health-check the plain wire port: a trusted peer
+    that sends no header holds a connection slot until the header times out.
+  - `PM_ADVERTISE_ADDR` still names the internal NLB, so pmon takes this path
+    only where that name resolves to the Service VIP. The Service must expose
+    every wire port.
 - Tailnet from the control plane (optional): `tailnet` has the control plane
   join the tailnet itself, with no Tailscale task, sidecar or edge NLB.
 

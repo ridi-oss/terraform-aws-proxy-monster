@@ -61,6 +61,8 @@ locals {
     },
   ] : s if local.github_kms_key != null && local.github_enabled]
 
+  private_subnet_cidrs = join(",", sort([for s in data.aws_subnet.private : s.cidr_block]))
+
   control_plane_environment = concat(
     [
       { name = "PM_HTTP_PORT", value = "8080" },
@@ -79,7 +81,7 @@ locals {
       # and would churn every deployment), so this is a deliberate trade: narrower than the
       # VPC, wider than the edge. Tightening it needs the app to accept a resolvable name or
       # the ALB to get static ENIs.
-      { name = "PM_TRUSTED_PROXIES", value = join(",", sort([for s in data.aws_subnet.private : s.cidr_block])) },
+      { name = "PM_TRUSTED_PROXIES", value = local.private_subnet_cidrs },
     ],
     var.instance.name == null ? [] : [{ name = "PM_INSTANCE_NAME", value = var.instance.name }],
     var.instance.description == "" ? [] : [{ name = "PM_INSTANCE_DESCRIPTION", value = var.instance.description }],
@@ -216,10 +218,13 @@ locals {
   tailscale_serve_config = var.tailscale == null ? "" : local.edge_enabled ? jsonencode({
     Services = {
       (var.tailscale.service_name) = {
-        TCP = {
-          "80"  = { TCPForward = "127.0.0.1:${local.edge_http_port}", ProxyProtocol = 2 }
-          "443" = { TCPForward = "127.0.0.1:${local.edge_https_port}", ProxyProtocol = 2 }
-        }
+        TCP = merge(
+          {
+            "80"  = { TCPForward = "127.0.0.1:${local.edge_http_port}", ProxyProtocol = 2 }
+            "443" = { TCPForward = "127.0.0.1:${local.edge_https_port}", ProxyProtocol = 2 }
+          },
+          { for key, port in local.edge_wire_ports : tostring(port) => { TCPForward = "${module.edge_nlb[0].dns_name}:${port}", ProxyProtocol = 2 } },
+        )
       }
     }
     }) : jsonencode({
@@ -555,13 +560,22 @@ module "ecs" {
             dependsOn   = [{ containerName = "tls-init", condition = "SUCCESS" }]
             mountPoints = [{ sourceVolume = "wire-tls", containerPath = "/tls", readOnly = true }]
 
-            portMappings = [
-              {
-                name          = "wire"
-                containerPort = ds.wire_port
-                protocol      = "tcp"
-              },
-            ]
+            portMappings = concat(
+              [
+                {
+                  name          = "wire"
+                  containerPort = ds.wire_port
+                  protocol      = "tcp"
+                },
+              ],
+              local.edge_wire_enabled ? [
+                {
+                  name          = "wire-relayed"
+                  containerPort = local.wire_proxy_protocol_port
+                  protocol      = "tcp"
+                },
+              ] : [],
+            )
 
             environment = concat(
               [
@@ -592,6 +606,10 @@ module "ecs" {
               try(ds.target.ca, null) == null ? [] : [{ name = "PM_TARGET_CA", value = ds.target.ca }],
               ds.tags == "" ? [] : [{ name = "PM_DATASOURCE_TAGS", value = ds.tags }],
               ds.description == "" ? [] : [{ name = "PM_DATASOURCE_DESCRIPTION", value = ds.description }],
+              local.edge_wire_enabled ? [
+                { name = "PM_PROXY_PROTOCOL_PORT", value = tostring(local.wire_proxy_protocol_port) },
+                { name = "PM_TRUSTED_PROXIES", value = local.edge_nlb_addresses },
+              ] : [],
             )
 
             secrets = concat(
@@ -693,14 +711,30 @@ module "ecs" {
 
         security_group_ids = ds.extra_security_group_ids
 
-        security_group_ingress_rules = {
-          nlb-wire = {
-            from_port                    = ds.wire_port
-            to_port                      = ds.wire_port
-            ip_protocol                  = "tcp"
-            referenced_security_group_id = module.internal_nlb.security_group_id
-          }
-        }
+        security_group_ingress_rules = merge(
+          {
+            nlb-wire = {
+              from_port                    = ds.wire_port
+              to_port                      = ds.wire_port
+              ip_protocol                  = "tcp"
+              referenced_security_group_id = module.internal_nlb.security_group_id
+            }
+          },
+          { for rule, value in {
+            edge-wire = {
+              from_port                    = local.wire_proxy_protocol_port
+              to_port                      = local.wire_proxy_protocol_port
+              ip_protocol                  = "tcp"
+              referenced_security_group_id = try(module.edge_nlb[0].security_group_id, null)
+            }
+            edge-wire-health = {
+              from_port                    = ds.wire_port
+              to_port                      = ds.wire_port
+              ip_protocol                  = "tcp"
+              referenced_security_group_id = try(module.edge_nlb[0].security_group_id, null)
+            }
+          } : rule => value if local.edge_wire_enabled },
+        )
         security_group_egress_rules = {
           all = {
             ip_protocol = "-1"
@@ -719,13 +753,22 @@ module "ecs" {
           operating_system_family = "LINUX"
         }
 
-        load_balancer = {
-          nlb-wire = {
-            target_group_arn = module.internal_nlb.target_groups["wire/${key}"].arn
-            container_name   = "proxy"
-            container_port   = ds.wire_port
-          }
-        }
+        load_balancer = merge(
+          {
+            nlb-wire = {
+              target_group_arn = module.internal_nlb.target_groups["wire/${key}"].arn
+              container_name   = "proxy"
+              container_port   = ds.wire_port
+            }
+          },
+          { for name, value in {
+            edge-wire = {
+              target_group_arn = try(local.edge_target_group_arns_after_listeners["wire/${key}"], null)
+              container_name   = "proxy"
+              container_port   = local.wire_proxy_protocol_port
+            }
+          } : name => value if local.edge_wire_enabled },
+        )
       }
     },
     {
