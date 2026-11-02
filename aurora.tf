@@ -27,7 +27,8 @@ module "aurora" {
 
   instances = {
     one = {
-      instance_class = "db.serverless"
+      instance_class             = "db.serverless"
+      auto_minor_version_upgrade = false
     }
   }
 
