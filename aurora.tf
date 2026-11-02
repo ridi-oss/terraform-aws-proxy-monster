@@ -9,7 +9,7 @@ module "aurora" {
   name            = var.name
   engine          = "aurora-postgresql"
   engine_mode     = "provisioned"
-  engine_version  = "17.5"
+  engine_version  = "17.9"
   master_username = local.db_master_username
   database_name   = "proxymonster"
 
