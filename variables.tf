@@ -20,6 +20,18 @@ variable "audit_retention_days" {
   default     = 30
 }
 
+variable "aurora_engine_version" {
+  type        = string
+  description = "Aurora PostgreSQL engine version for the cluster. A major version such as \"17\" follows AWS minor upgrades without a plan diff."
+  default     = "17"
+}
+
+variable "aurora_instance_engine_version" {
+  type        = string
+  description = "Aurora PostgreSQL engine version for the cluster instance, as a full minor version such as \"17.9\". The instance resource reports a diff for a major-only version, so match the running minor version."
+  default     = "17.9"
+}
+
 variable "aurora_max_capacity" {
   type        = number
   description = "Serverless v2 ACU ceiling for the control-plane store. Scale it with the datasource count: every brokered query reaches this cluster through the control plane's Decide call, and each proxy pushes a full catalog at boot."
