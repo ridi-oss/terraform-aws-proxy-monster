@@ -1,5 +1,6 @@
 locals {
   db_master_username = "pmadmin"
+  aurora_engine      = "aurora-postgresql"
 }
 
 module "aurora" {
@@ -7,9 +8,9 @@ module "aurora" {
   version = "~> 10.2"
 
   name            = var.name
-  engine          = "aurora-postgresql"
+  engine          = local.aurora_engine
   engine_mode     = "provisioned"
-  engine_version  = "17.5"
+  engine_version  = var.aurora_engine_version
   master_username = local.db_master_username
   database_name   = "proxymonster"
 
@@ -25,11 +26,7 @@ module "aurora" {
     max_capacity = var.aurora_max_capacity
   }
 
-  instances = {
-    one = {
-      instance_class = "db.serverless"
-    }
-  }
+  instances = {}
 
   create_db_subnet_group = true
   vpc_id                 = var.vpc_id
@@ -50,4 +47,21 @@ module "aurora" {
   deletion_protection = true
   apply_immediately   = true
   skip_final_snapshot = false
+}
+
+resource "aws_rds_cluster_instance" "aurora" {
+  identifier                 = "${var.name}-one"
+  cluster_identifier         = module.aurora.cluster_id
+  engine                     = local.aurora_engine
+  engine_version             = var.aurora_instance_engine_version
+  instance_class             = "db.serverless"
+  db_subnet_group_name       = module.aurora.db_subnet_group_name
+  auto_minor_version_upgrade = false
+  apply_immediately          = true
+  copy_tags_to_snapshot      = true
+  monitoring_interval        = 0
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
