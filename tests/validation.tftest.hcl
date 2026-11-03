@@ -20,6 +20,9 @@ mock_provider "aws" {
   mock_data "aws_caller_identity" {
     defaults = { account_id = "111111111111" }
   }
+  mock_data "aws_network_interface" {
+    defaults = { private_ip = "10.0.0.10" }
+  }
 }
 mock_provider "archive" {}
 mock_provider "external" {
@@ -788,6 +791,10 @@ run "tailscale_edge_forwards_with_proxy_protocol_to_caddy" {
     error_message = "The edge NLB must admit the tailscale host on exactly the control-plane and web ports."
   }
   assert {
+    condition     = length([for env in module.ecs.services["proxy-app"].container_definitions["proxy"].container_definition.environment : env if env.name == "PM_PROXY_PROTOCOL_PORT"]) == 0
+    error_message = "Without edge.wire, the proxy must not open a PROXY protocol port."
+  }
+  assert {
     condition = contains(
       module.ecs.services["proxy-monster-tailscale"].container_definitions["tailscale"].container_definition.dependsOn,
       { containerName = "caddy", condition = "HEALTHY" },
@@ -802,6 +809,104 @@ run "tailscale_edge_forwards_with_proxy_protocol_to_caddy" {
     condition     = length(module.edge_redeploy) == 1
     error_message = "With edge, a schedule must restart the host so a renewed certificate is exported."
   }
+}
+
+run "tailscale_edge_wire_forwards_each_wire_port_with_proxy_protocol" {
+  command = plan
+  override_data {
+    target = data.aws_network_interface.edge_nlb
+    values = { private_ip = "10.0.0.10" }
+  }
+  override_module {
+    target = module.edge_nlb
+    outputs = {
+      arn_suffix        = "net/proxy-monster-tailscale/0123456789abcdef"
+      dns_name          = "internal-edge.example.com"
+      security_group_id = "sg-0fedcba9876543210"
+      listeners = {
+        cp-http    = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:listener/net/edge/0123456789abcdef/0000000000000001" }
+        web        = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:listener/net/edge/0123456789abcdef/0000000000000002" }
+        "wire/app" = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:listener/net/edge/0123456789abcdef/0000000000000003" }
+      }
+      target_groups = {
+        cp-http    = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/edge-cp/0123456789abcdef" }
+        web        = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/edge-web/0123456789abcdef" }
+        "wire/app" = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/edge-40001/0123456789abcdef" }
+      }
+    }
+  }
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 40001, target = { host = "db.example.com", port = 3306, db = "app" } }
+      off = { engine = "mysql", wire_port = 40002, enabled = false, target = { host = "db.example.com", port = 3306, db = "off" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      edge = {
+        certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/11111111-1111-1111-1111-111111111111"
+        caddy_image     = "caddy@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        cli_image       = "amazon/aws-cli@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        openssl_image   = "python@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        wire            = true
+      }
+    }
+  }
+  assert {
+    condition = jsondecode(one([
+      for e in module.ecs.services["proxy-monster-tailscale"].container_definitions["config-init"].container_definition.environment : e.value if e.name == "TS_SERVE_CONFIG_JSON"
+      ])).Services["svc:pm-console"].TCP == {
+      "80"    = { TCPForward = "127.0.0.1:8880", ProxyProtocol = 2 }
+      "443"   = { TCPForward = "127.0.0.1:8443", ProxyProtocol = 2 }
+      "40001" = { TCPForward = "internal-edge.example.com:40001", ProxyProtocol = 2 }
+    }
+    error_message = "With edge.wire, the serve config must hand each enabled wire port to the edge NLB with a PROXY v2 header."
+  }
+  assert {
+    condition     = keys(aws_vpc_security_group_ingress_rule.edge_nlb_from_tailscale) == ["cp-http", "web", "wire/app"]
+    error_message = "The edge NLB must admit the tailscale host on the console ports and each enabled wire port."
+  }
+  assert {
+    condition = alltrue([
+      contains(module.ecs.services["proxy-app"].container_definitions["proxy"].container_definition.environment, { name = "PM_PROXY_PROTOCOL_PORT", value = "16033" }),
+      contains(module.ecs.services["proxy-app"].container_definitions["proxy"].container_definition.environment, { name = "PM_TRUSTED_PROXIES", value = "10.0.0.10" }),
+      contains(module.ecs.services["proxy-app"].container_definitions["proxy"].container_definition.environment, { name = "PM_PROXY_PORT", value = "40001" }),
+    ])
+    error_message = "With edge.wire, the proxy must open PROXY protocol port 16033 beside its wire port and trust only the edge NLB's addresses there."
+  }
+  assert {
+    condition     = local.edge_target_group_arns_after_listeners["wire/app"] == "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/edge-40001/0123456789abcdef"
+    error_message = "The proxy must join its edge wire target group only through the listener."
+  }
+  assert {
+    condition     = !contains(keys(module.ecs.services), "proxy-off")
+    error_message = "A disabled datasource must get no proxy and no edge wire port."
+  }
+}
+
+run "tailscale_edge_wire_rejects_a_wire_port_on_the_proxy_protocol_port" {
+  command = plan
+  variables {
+    datasources = {
+      app = { engine = "mysql", wire_port = 16033, target = { host = "db.example.com", port = 3306, db = "app" } }
+    }
+    tailscale = {
+      service_name = "svc:pm-console"
+      tag          = "tag:pm-console-host"
+      client_id    = "example-client-id"
+      image        = "tailscale/tailscale@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+      edge = {
+        certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/11111111-1111-1111-1111-111111111111"
+        caddy_image     = "caddy@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        cli_image       = "amazon/aws-cli@sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        openssl_image   = "python@sha256:3333333333333333333333333333333333333333333333333333333333333333"
+        wire            = true
+      }
+    }
+  }
+  expect_failures = [var.tailscale]
 }
 
 run "reauth_complete_page_goes_to_web" {

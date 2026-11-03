@@ -7,6 +7,12 @@ locals {
   edge_http_port  = 8880
   edge_health     = 8881
 
+  edge_wire_enabled        = local.edge_enabled && try(local.tailscale_edge.wire, false)
+  wire_proxy_protocol_port = 16033
+  edge_wire_ports          = { for key, ds in local.serving_datasources : "wire/${key}" => ds.wire_port if local.edge_wire_enabled }
+  edge_listener_ports      = merge(local.edge_upstream_ports, local.edge_wire_ports)
+  edge_nlb_addresses       = join(",", sort(data.aws_network_interface.edge_nlb[*].private_ip))
+
   edge_upstream_ports = {
     cp-http = 8080
     web     = 41300
@@ -18,7 +24,7 @@ locals {
   }
 
   edge_target_group_arns_after_listeners = {
-    for key in keys(local.edge_upstream_ports) : key => (
+    for key in keys(local.edge_listener_ports) : key => (
       module.edge_nlb[0].listeners[key].arn == null ? null : module.edge_nlb[0].target_groups[key].arn
     ) if local.edge_enabled
   }
@@ -60,7 +66,7 @@ module "edge_nlb" {
   }
 
   listeners = {
-    for key, port in local.edge_upstream_ports : key => {
+    for key, port in local.edge_listener_ports : key => {
       port     = port
       protocol = "TCP"
       forward = {
@@ -69,7 +75,7 @@ module "edge_nlb" {
     }
   }
 
-  target_groups = {
+  target_groups = merge({
     for key, port in local.edge_upstream_ports : key => {
       name                 = "${var.name}-ts-${key}"
       protocol             = "TCP"
@@ -86,18 +92,48 @@ module "edge_nlb" {
         unhealthy_threshold = local.edge_health_checks[key].unhealthy_threshold
       }
     }
+    }, {
+    for key, port in local.edge_wire_ports : key => {
+      name                 = "${var.name}-ts-${port}"
+      protocol             = "TCP"
+      port                 = local.wire_proxy_protocol_port
+      target_type          = "ip"
+      create_attachment    = false
+      deregistration_delay = 5
+      health_check = {
+        protocol            = "TCP"
+        port                = port
+        interval            = 10
+        healthy_threshold   = 2
+        unhealthy_threshold = 2
+      }
+    }
+  })
+}
+
+data "aws_network_interface" "edge_nlb" {
+  count = local.edge_wire_enabled ? length(local.lb_subnets) : 0
+
+  filter {
+    name   = "description"
+    values = ["ELB ${module.edge_nlb[0].arn_suffix}"]
+  }
+
+  filter {
+    name   = "subnet-id"
+    values = [local.lb_subnets[count.index]]
   }
 }
 
 resource "aws_vpc_security_group_ingress_rule" "edge_nlb_from_tailscale" {
-  for_each = local.edge_enabled ? local.edge_upstream_ports : {}
+  for_each = local.edge_enabled ? local.edge_listener_ports : {}
 
   security_group_id            = module.edge_nlb[0].security_group_id
   referenced_security_group_id = module.ecs.services[local.tailscale_service].security_group_id
   from_port                    = each.value
   to_port                      = each.value
   ip_protocol                  = "tcp"
-  description                  = "Caddy on the tailscale host"
+  description                  = startswith(each.key, "wire/") ? "Wire relay on the tailscale host" : "Caddy on the tailscale host"
 
   lifecycle {
     precondition {
