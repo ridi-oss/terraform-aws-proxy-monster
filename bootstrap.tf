@@ -202,7 +202,7 @@ module "bootstrap" {
 
 module "seal_audit_logs" {
   source  = "terraform-aws-modules/cloudwatch/aws//modules/log-group"
-  version = "~> 5.0"
+  version = "~> 6.0"
 
   count = local.bootstrap_enabled ? 1 : 0
 
@@ -285,7 +285,7 @@ data "aws_iam_policy_document" "seal_audit_delivery" {
 
 module "seal_audit_metric" {
   source  = "terraform-aws-modules/cloudwatch/aws//modules/log-metric-filter"
-  version = "~> 5.0"
+  version = "~> 6.0"
 
   count = local.bootstrap_enabled ? 1 : 0
 
@@ -300,7 +300,7 @@ module "seal_audit_metric" {
 
 module "seal_audit_alarm" {
   source  = "terraform-aws-modules/cloudwatch/aws//modules/metric-alarm"
-  version = "~> 5.0"
+  version = "~> 6.0"
 
   count = local.bootstrap_enabled ? 1 : 0
 
