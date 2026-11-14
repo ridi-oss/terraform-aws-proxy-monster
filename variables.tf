@@ -513,7 +513,8 @@ variable "target_credential_groups" {
     group's schemas. DROP is the one keyword worth scoping this way: schema-wide, it carries
     DROP DATABASE and TRUNCATE on every table, which is why a production group keeps it out of
     privileges. The table part may carry "*" as a glob (schema.*_dropme_20260929), expanded to
-    the base tables that exist when the function runs; a table created later needs another run.
+    the base tables that exist when the function runs; a table created later needs another run,
+    for which {"action": "grants"} suffices without rotating the password.
     An entry that matches no table is skipped and reported in drop_tables_skipped, since MySQL
     refuses a grant on a missing table. MySQL keeps the table-level row across DROP TABLE, so a
     table recreated under the same name inherits the grant.

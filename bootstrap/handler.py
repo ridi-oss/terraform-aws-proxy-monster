@@ -182,24 +182,35 @@ def handler(event: dict[str, Any] | None, _context: object) -> dict[str, Any]:
     # reach it, since provisioning rotates the password and redeploys the proxies.
     match event.get("action", "provision"):
         case "provision":
-            return _provision(event)
+            return _provision(event, rotate=True)
+        case "grants":
+            return _provision(event, rotate=False)
         case "list-users":
             return _list_users(event)
         case "inspect-postgres-roles":
             return _inspect_postgres_roles(event)
         case action:
             raise BootstrapError(
-                f"unknown action {action!r}; expected 'provision', 'list-users',"
+                f"unknown action {action!r}; expected 'provision', 'grants', 'list-users',"
                 " or 'inspect-postgres-roles'"
             )
 
 
-def _provision(event: dict[str, Any]) -> dict[str, Any]:
+def _provision(event: dict[str, Any], *, rotate: bool) -> dict[str, Any]:
+    """Re-apply the group's grants; with rotate, also set, publish, and roll out a new password.
+
+    Without rotate the account must already exist: creating it would leave it with no password.
+    """
     group_name = event.get("group", "")
     group = _group(group_name)
 
-    LOGGER.info("bootstrapping group %s (%s)", group_name, group.label)
-    password = Secret(secrets.token_urlsafe(32))
+    LOGGER.info(
+        "%s group %s (%s)",
+        "bootstrapping" if rotate else "re-granting",
+        group_name,
+        group.label,
+    )
+    password = Secret(secrets.token_urlsafe(32)) if rotate else None
     _validate(group, password)
 
     endpoint, port, allowed_hosts, master = _resolve(group)
@@ -220,12 +231,12 @@ def _provision(event: dict[str, Any]) -> dict[str, Any]:
         raise BootstrapError(
             _scrub(
                 f"{type(exc).__name__}: {exc}",
-                (master.password.reveal(), password.reveal()),
+                (master.password.reveal(), password.reveal() if password else ""),
             )
         ) from None
 
-    written = _publish(group, password)
-    restarted = _restart_proxies(group)
+    written = _publish(group, password) if password else []
+    restarted = _restart_proxies(group) if password else []
 
     return {
         "group": group_name,
@@ -235,6 +246,7 @@ def _provision(event: dict[str, Any]) -> dict[str, Any]:
         "engine": group.engine,
         "endpoint": endpoint,
         "username": group.username,
+        "password_rotated": password is not None,
         "secrets_written": written,
         "services_restarted": restarted,
         "grants": grants,
@@ -383,7 +395,7 @@ def _mysql_user_rows(users: Any, edges: Any | None) -> list[dict[str, Any]]:
     ]
 
 
-def _validate(group: Group, password: Secret) -> None:
+def _validate(group: Group, password: Secret | None) -> None:
     if group.postgres_role is not None and (
         group.engine != "postgres"
         or not re.fullmatch(r"[A-Za-z0-9_]{1,63}", group.postgres_role)
@@ -448,7 +460,7 @@ def _validate(group: Group, password: Secret) -> None:
         )
     if group.engine == "mysql" and not HOST_PATTERN.match(group.host_pattern or ""):
         raise BootstrapError("host_pattern is not an address pattern")
-    if not PASSWORD_ALPHABET.match(password.reveal()):
+    if password is not None and not PASSWORD_ALPHABET.match(password.reveal()):
         raise BootstrapError("generated password left the expected alphabet")
 
 
@@ -587,7 +599,7 @@ def _provision_mysql(
     endpoint: str,
     port: int,
     master: MasterCredential,
-    password: Secret,
+    password: Secret | None,
 ) -> tuple[list[str], list[str]]:
     user = f"'{group.username}'@'{group.host_pattern}'"
     # PyMySQL interpolates client-side: double a literal % only in statements that carry args.
@@ -608,13 +620,23 @@ def _provision_mysql(
         connection.cursor() as cursor,
     ):
         drop_tables, drop_tables_skipped = _resolve_drop_tables(cursor, group)
-        cursor.execute(
-            f"CREATE USER IF NOT EXISTS {user_escaped} IDENTIFIED BY %s",
-            (password.reveal(),),
-        )
-        cursor.execute(
-            f"ALTER USER {user_escaped} IDENTIFIED BY %s", (password.reveal(),)
-        )
+        if password is None:
+            cursor.execute(
+                "SELECT 1 FROM mysql.user WHERE User = %s AND Host = %s",
+                (group.username, group.host_pattern),
+            )
+            if cursor.fetchone() is None:
+                raise BootstrapError(
+                    f"{user} does not exist; provision the group before re-granting it"
+                )
+        else:
+            cursor.execute(
+                f"CREATE USER IF NOT EXISTS {user_escaped} IDENTIFIED BY %s",
+                (password.reveal(),),
+            )
+            cursor.execute(
+                f"ALTER USER {user_escaped} IDENTIFIED BY %s", (password.reveal(),)
+            )
         cursor.execute(f"REVOKE ALL PRIVILEGES, GRANT OPTION FROM {user}")
         for schema in group.schemas:
             cursor.execute(
@@ -713,7 +735,7 @@ def _provision_postgres(
     endpoint: str,
     port: int,
     master: MasterCredential,
-    password: Secret,
+    password: Secret | None,
 ) -> list[str]:
     if group.postgres_role is not None:
         return _provision_postgres_inherited(group, endpoint, port, master, password)
@@ -741,11 +763,12 @@ def _provision_postgres(
         try:
             cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (username,))
             if cursor.fetchone() is None:
+                _require_password(group, password)
                 cursor.execute(f'CREATE ROLE "{username}" LOGIN')
             # SUPERUSER, REPLICATION, and BYPASSRLS need real superuser even to write the NO- form.
             cursor.execute(
                 f'ALTER ROLE "{username}" WITH LOGIN NOCREATEDB NOCREATEROLE'
-                f" PASSWORD '{_scram_verifier(password)}'"
+                + _password_clause(password)
             )
             cursor.execute(
                 "SELECT pg_get_userbyid(roleid) FROM pg_auth_members"
@@ -821,6 +844,17 @@ def _provision_postgres(
             connection.rollback()
             raise
         return grants
+
+
+def _require_password(group: Group, password: Secret | None) -> None:
+    if password is None:
+        raise BootstrapError(
+            f"role {group.username!r} does not exist; provision the group before re-granting it"
+        )
+
+
+def _password_clause(password: Secret | None) -> str:
+    return "" if password is None else f" PASSWORD '{_scram_verifier(password)}'"
 
 
 def _postgres_role_state(cursor: Any) -> dict[str, Any]:
@@ -948,7 +982,11 @@ def _verify_postgres_inherited_access(cursor: Any, group: Group) -> None:
 
 
 def _provision_postgres_inherited(
-    group: Group, endpoint: str, port: int, master: MasterCredential, password: Secret
+    group: Group,
+    endpoint: str,
+    port: int,
+    master: MasterCredential,
+    password: Secret | None,
 ) -> list[str]:
     if group.postgres_role is None:
         raise BootstrapError("postgres_role is required for inherited provisioning")
@@ -967,10 +1005,10 @@ def _provision_postgres_inherited(
             exists = _check_postgres_inheritance(cursor, group)
             username = _quote_ident(group.username)
             if not exists:
+                _require_password(group, password)
                 cursor.execute(f"CREATE ROLE {username} LOGIN")
             cursor.execute(
-                f"ALTER ROLE {username} WITH LOGIN INHERIT"
-                f" PASSWORD '{_scram_verifier(password)}'"
+                f"ALTER ROLE {username} WITH LOGIN INHERIT" + _password_clause(password)
             )
             for option in ("INHERIT TRUE", "SET TRUE", "ADMIN FALSE"):
                 cursor.execute(

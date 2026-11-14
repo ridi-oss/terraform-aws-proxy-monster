@@ -147,6 +147,24 @@ For an RDS-backed `target_credential_groups` entry:
    encrypted with the target-credentials key. The master password never enters
    Terraform state.
 
+The Lambda takes one event per group. `action` defaults to `provision`, and an
+unknown `action` is refused:
+
+- `{"group": "<name>"}` or `{"action": "provision", "group": "<name>"}`:
+  creates the account if needed, sets a new password, re-applies the grants,
+  writes the password into each datasource's secret, and redeploys the
+  group's running proxies. Every wire client of the group reconnects.
+- `{"action": "grants", "group": "<name>"}`: re-applies the grants only,
+  including a fresh `drop_tables` expansion. It keeps the password, writes no
+  secret, and restarts nothing, so the response carries
+  `"password_rotated": false` and empty `secrets_written` and
+  `services_restarted`. The account must already exist; otherwise the call
+  fails, and the first run has to be `provision`.
+- `{"action": "list-users"}`, optionally with `group`: reports the accounts
+  each target holds and writes nothing.
+- `{"action": "inspect-postgres-roles", "group": "<name>"}`: reports a
+  PostgreSQL target's roles and memberships in a read-only transaction.
+
 When the cluster and the credential group live in the same root,
 `rds_identifier` must be a literal: the KMS key this module creates encrypts
 the cluster's master secret, so a reference closes a cycle.
