@@ -55,6 +55,14 @@ jobs:
         ports: ["5432:5432"]
         options: >-
           --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: local-bootstrap-test
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -plocal-bootstrap-test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
 
     steps:
       - uses: actions/checkout@v7
@@ -72,3 +80,4 @@ jobs:
       - run: uv run --frozen python -m unittest -v
         env:
           POSTGRES_TEST_PORT: "5432"
+          MYSQL_TEST_PORT: "3306"
