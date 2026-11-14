@@ -119,13 +119,22 @@ class PostgresRoleIntegrationTest(unittest.TestCase):
             connection.commit()
 
     def provision(self, group, master="bootstrap_master", password=None):
+        grants, _ = self.apply(
+            group, master, bootstrap.Secret(password or self.password)
+        )
+        return grants
+
+    def grants(self, group, master="bootstrap_master"):
+        return self.apply(group, master, None)
+
+    def apply(self, group, master, password):
         with patch.object(bootstrap, "_tls_context", return_value=False):
             return bootstrap._provision_postgres(
                 group,
                 "127.0.0.1",
                 int(os.environ["POSTGRES_TEST_PORT"]),
                 bootstrap.MasterCredential(master, bootstrap.Secret(self.password)),
-                bootstrap.Secret(password or self.password),
+                password,
             )
 
     def query(self, sql, parameters=()):
@@ -392,6 +401,102 @@ class PostgresRoleIntegrationTest(unittest.TestCase):
             ):
                 bootstrap._inspect_postgres_roles({"group": "test"})
 
+
+    def stored_password(self, group):
+        return self.query(
+            "SELECT rolpassword FROM pg_authid WHERE rolname = %s", (group.username,)
+        )
+
+    def memberships(self, group):
+        return self.query(
+            "SELECT r.rolname FROM pg_auth_members a JOIN pg_roles r ON r.oid = a.roleid"
+            " WHERE a.member = (SELECT oid FROM pg_roles WHERE rolname = %s)"
+            " ORDER BY r.rolname",
+            (group.username,),
+        )
+
+    def superuser(self, *statements):
+        with self.connect() as connection:
+            cursor = connection.cursor()
+            for sql in statements:
+                cursor.execute(sql)
+            connection.commit()
+
+    def direct_group(self):
+        self.superuser(
+            "CREATE SCHEMA IF NOT EXISTS direct_test AUTHORIZATION app_owner",
+            "CREATE TABLE IF NOT EXISTS direct_test.items (id int)",
+            "ALTER TABLE direct_test.items OWNER TO app_owner",
+        )
+        return make_group(postgres_role=None, schemas=["direct_test"])
+
+    def test_inherited_grants_restore_a_revoked_membership_without_rotation(self):
+        group = make_group()
+        self.provision(group)
+        stored = self.stored_password(group)
+        with self.connect(group.username) as live:
+            cursor = live.cursor()
+            self.superuser(
+                f"REVOKE app_read FROM {group.username} GRANTED BY bootstrap_master"
+            )
+            self.assertEqual(self.memberships(group), [])
+
+            grants, added = self.grants(group)
+
+            self.assertEqual(
+                added, ["ROLE app_read: INHERIT TRUE, SET TRUE, ADMIN FALSE"]
+            )
+            self.assertEqual(grants, added)
+            cursor.execute("SELECT value FROM inherit_test.users")
+        self.assertEqual(self.stored_password(group), stored)
+        self.assertEqual(self.memberships(group), [["app_read"]])
+        self.assertEqual(self.grants(group)[1], [])
+
+    def test_inherited_grants_refuse_a_missing_role(self):
+        group = make_group()
+        with self.assertRaisesRegex(bootstrap.BootstrapError, "does not exist"):
+            self.grants(group)
+        self.assert_absent(group)
+
+    def test_direct_grants_restore_a_revoked_table_privilege_without_rotation(self):
+        group = self.direct_group()
+        self.provision(group, master="postgres")
+        stored = self.stored_password(group)
+        with self.connect(group.username) as live:
+            cursor = live.cursor()
+            cursor.execute("SELECT count(*) FROM direct_test.items")
+            self.superuser(f"REVOKE SELECT ON direct_test.items FROM {group.username}")
+            self.assertEqual(
+                self.query(
+                    "SELECT has_table_privilege(%s, 'direct_test.items', 'SELECT')",
+                    (group.username,),
+                ),
+                [[False]],
+            )
+
+            _, added = self.grants(group, master="postgres")
+
+            self.assertEqual(added, ["SELECT ON direct_test.items"])
+            cursor.execute("SELECT count(*) FROM direct_test.items")
+        self.assertEqual(self.stored_password(group), stored)
+
+    def test_direct_grants_keep_an_extra_membership_that_provision_removes(self):
+        group = self.direct_group()
+        self.provision(group, master="postgres")
+        self.superuser(f"GRANT ungranted_role TO {group.username}")
+
+        _, added = self.grants(group, master="postgres")
+        self.assertEqual(added, [])
+        self.assertEqual(self.memberships(group), [["ungranted_role"]])
+
+        self.provision(group, master="postgres")
+        self.assertEqual(self.memberships(group), [])
+
+    def test_direct_grants_refuse_a_missing_role(self):
+        group = self.direct_group()
+        with self.assertRaisesRegex(bootstrap.BootstrapError, "does not exist"):
+            self.grants(group, master="postgres")
+        self.assert_absent(group)
 
 if __name__ == "__main__":
     unittest.main()

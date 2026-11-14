@@ -154,12 +154,16 @@ unknown `action` is refused:
   creates the account if needed, sets a new password, re-applies the grants,
   writes the password into each datasource's secret, and redeploys the
   group's running proxies. Every wire client of the group reconnects.
-- `{"action": "grants", "group": "<name>"}`: re-applies the grants only,
-  including a fresh `drop_tables` expansion. It keeps the password, writes no
-  secret, and restarts nothing, so the response carries
-  `"password_rotated": false` and empty `secrets_written` and
-  `services_restarted`. The account must already exist; otherwise the call
-  fails, and the first run has to be `provision`.
+- `{"action": "grants", "group": "<name>"}`: issues the group's grants again,
+  including a fresh `drop_tables` expansion, and revokes nothing. A grant that
+  drifted away comes back; a grant beyond the configuration stays, and so does
+  a PostgreSQL role attribute or membership the account picked up. Live
+  connections see no gap. It keeps the password, writes no secret, and restarts
+  nothing: the response carries `"password_rotated": false`, empty
+  `secrets_written` and `services_restarted`, and `grants_added` listing what
+  the call restored. The account must already exist; otherwise the call fails,
+  and the first run has to be `provision`. To drop a privilege removed from the
+  configuration, run `provision`, which resets the account before granting.
 - `{"action": "list-users"}`, optionally with `group`: reports the accounts
   each target holds and writes nothing.
 - `{"action": "inspect-postgres-roles", "group": "<name>"}`: reports a

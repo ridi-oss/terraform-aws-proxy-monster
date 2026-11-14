@@ -219,11 +219,13 @@ def _provision(event: dict[str, Any], *, rotate: bool) -> dict[str, Any]:
     try:
         match group.engine:
             case "mysql":
-                grants, drop_tables_skipped = _provision_mysql(
+                grants, drop_tables_skipped, added = _provision_mysql(
                     group, endpoint, port, master, password
                 )
             case "postgres":
-                grants = _provision_postgres(group, endpoint, port, master, password)
+                grants, added = _provision_postgres(
+                    group, endpoint, port, master, password
+                )
                 drop_tables_skipped = []
             case engine:
                 raise BootstrapError(f"unknown engine {engine!r}")
@@ -238,7 +240,7 @@ def _provision(event: dict[str, Any], *, rotate: bool) -> dict[str, Any]:
     written = _publish(group, password) if password else []
     restarted = _restart_proxies(group) if password else []
 
-    return {
+    response = {
         "group": group_name,
         "target": group.label,
         # Kept beside target, null off RDS, so a consumer reading the older key still resolves.
@@ -252,6 +254,9 @@ def _provision(event: dict[str, Any], *, rotate: bool) -> dict[str, Any]:
         "grants": grants,
         "drop_tables_skipped": drop_tables_skipped,
     }
+    if password is None:
+        response["grants_added"] = added
+    return response
 
 
 def _group(group_name: str) -> Group:
@@ -600,7 +605,7 @@ def _provision_mysql(
     port: int,
     master: MasterCredential,
     password: Secret | None,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str]]:
     user = f"'{group.username}'@'{group.host_pattern}'"
     # PyMySQL interpolates client-side: double a literal % only in statements that carry args.
     user_escaped = user.replace("%", "%%")
@@ -637,7 +642,9 @@ def _provision_mysql(
             cursor.execute(
                 f"ALTER USER {user_escaped} IDENTIFIED BY %s", (password.reveal(),)
             )
-        cursor.execute(f"REVOKE ALL PRIVILEGES, GRANT OPTION FROM {user}")
+        before = _mysql_grants(cursor, user)
+        if password is not None:
+            cursor.execute(f"REVOKE ALL PRIVILEGES, GRANT OPTION FROM {user}")
         for schema in group.schemas:
             cursor.execute(
                 f"GRANT {privileges} ON `{_escape_db_pattern(schema)}`.* TO {user}"
@@ -657,34 +664,39 @@ def _provision_mysql(
             cursor.execute(
                 f"GRANT {', '.join(group.global_privileges)} ON *.* TO {user}"
             )
-        # Not SHOW GRANTS: MariaDB still emits "IDENTIFIED VIA ... USING '*<hash>'" there.
-        cursor.execute(
-            "SELECT PRIVILEGE_TYPE, TABLE_SCHEMA, IS_GRANTABLE"
-            " FROM information_schema.SCHEMA_PRIVILEGES"
-            " WHERE GRANTEE = %s ORDER BY TABLE_SCHEMA, PRIVILEGE_TYPE",
-            (user,),
-        )
-        schema_rows = cursor.fetchall()
-        grants = [f"{row[0]} ON {row[1]}" for row in schema_rows]
-        # The view carries no GRANT OPTION row: grantability rides on every other row instead.
-        grants += [
-            f"GRANT OPTION ON {schema}"
-            for schema in sorted({row[1] for row in schema_rows if row[2] == "YES"})
-        ]
-        cursor.execute(
-            "SELECT PRIVILEGE_TYPE, TABLE_SCHEMA, TABLE_NAME"
-            " FROM information_schema.TABLE_PRIVILEGES"
-            " WHERE GRANTEE = %s ORDER BY TABLE_SCHEMA, TABLE_NAME, PRIVILEGE_TYPE",
-            (user,),
-        )
-        grants += [f"{row[0]} ON {row[1]}.{row[2]}" for row in cursor.fetchall()]
-        cursor.execute(
-            "SELECT PRIVILEGE_TYPE FROM information_schema.USER_PRIVILEGES"
-            " WHERE GRANTEE = %s AND PRIVILEGE_TYPE <> 'USAGE' ORDER BY PRIVILEGE_TYPE",
-            (user,),
-        )
-        grants += [f"{row[0]} ON *.*" for row in cursor.fetchall()]
-        return grants, drop_tables_skipped
+        grants = _mysql_grants(cursor, user)
+        return grants, drop_tables_skipped, sorted(set(grants) - set(before))
+
+
+def _mysql_grants(cursor: Any, user: str) -> list[str]:
+    # Not SHOW GRANTS: MariaDB still emits "IDENTIFIED VIA ... USING '*<hash>'" there.
+    cursor.execute(
+        "SELECT PRIVILEGE_TYPE, TABLE_SCHEMA, IS_GRANTABLE"
+        " FROM information_schema.SCHEMA_PRIVILEGES"
+        " WHERE GRANTEE = %s ORDER BY TABLE_SCHEMA, PRIVILEGE_TYPE",
+        (user,),
+    )
+    schema_rows = cursor.fetchall()
+    grants = [f"{row[0]} ON {row[1]}" for row in schema_rows]
+    # The view carries no GRANT OPTION row: grantability rides on every other row instead.
+    grants += [
+        f"GRANT OPTION ON {schema}"
+        for schema in sorted({row[1] for row in schema_rows if row[2] == "YES"})
+    ]
+    cursor.execute(
+        "SELECT PRIVILEGE_TYPE, TABLE_SCHEMA, TABLE_NAME"
+        " FROM information_schema.TABLE_PRIVILEGES"
+        " WHERE GRANTEE = %s ORDER BY TABLE_SCHEMA, TABLE_NAME, PRIVILEGE_TYPE",
+        (user,),
+    )
+    grants += [f"{row[0]} ON {row[1]}.{row[2]}" for row in cursor.fetchall()]
+    cursor.execute(
+        "SELECT PRIVILEGE_TYPE FROM information_schema.USER_PRIVILEGES"
+        " WHERE GRANTEE = %s AND PRIVILEGE_TYPE <> 'USAGE' ORDER BY PRIVILEGE_TYPE",
+        (user,),
+    )
+    grants += [f"{row[0]} ON *.*" for row in cursor.fetchall()]
+    return grants
 
 
 def _resolve_drop_tables(
@@ -736,7 +748,7 @@ def _provision_postgres(
     port: int,
     master: MasterCredential,
     password: Secret | None,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     if group.postgres_role is not None:
         return _provision_postgres_inherited(group, endpoint, port, master, password)
     username = group.username
@@ -765,18 +777,24 @@ def _provision_postgres(
             if cursor.fetchone() is None:
                 _require_password(group, password)
                 cursor.execute(f'CREATE ROLE "{username}" LOGIN')
-            # SUPERUSER, REPLICATION, and BYPASSRLS need real superuser even to write the NO- form.
-            cursor.execute(
-                f'ALTER ROLE "{username}" WITH LOGIN NOCREATEDB NOCREATEROLE'
-                + _password_clause(password)
-            )
-            cursor.execute(
-                "SELECT pg_get_userbyid(roleid) FROM pg_auth_members"
-                " WHERE member = (SELECT oid FROM pg_roles WHERE rolname = %s)",
-                (username,),
-            )
-            for (member_of,) in cursor.fetchall():
-                cursor.execute(f'REVOKE {_quote_ident(member_of)} FROM "{username}"')
+            _, before = _postgres_grants(cursor, username, grant_sequences)
+            if password is None:
+                cursor.execute(f'ALTER ROLE "{username}" WITH LOGIN')
+            else:
+                # SUPERUSER, REPLICATION, and BYPASSRLS need real superuser even to write the NO- form.
+                cursor.execute(
+                    f'ALTER ROLE "{username}" WITH LOGIN NOCREATEDB NOCREATEROLE'
+                    + _password_clause(password)
+                )
+                cursor.execute(
+                    "SELECT pg_get_userbyid(roleid) FROM pg_auth_members"
+                    " WHERE member = (SELECT oid FROM pg_roles WHERE rolname = %s)",
+                    (username,),
+                )
+                for (member_of,) in cursor.fetchall():
+                    cursor.execute(
+                        f'REVOKE {_quote_ident(member_of)} FROM "{username}"'
+                    )
             cursor.execute(
                 f'GRANT CONNECT ON DATABASE "{group.database}" TO "{username}"'
             )
@@ -825,25 +843,34 @@ def _provision_postgres(
                 # Unwind only what this run added, so a pre-existing membership survives.
                 for owner in borrowed:
                     cursor.execute(f"REVOKE {_quote_ident(owner)} FROM CURRENT_USER")
-            cursor.execute(
-                "SELECT DISTINCT table_schema, privilege_type"
-                " FROM information_schema.role_table_grants WHERE grantee = %s",
-                (username,),
-            )
-            grants = [f"{row[0]}: {row[1]}" for row in cursor.fetchall()]
-            if grant_sequences:
-                cursor.execute(
-                    "SELECT DISTINCT object_schema, privilege_type"
-                    " FROM information_schema.role_usage_grants"
-                    " WHERE grantee = %s AND object_type = 'SEQUENCE'",
-                    (username,),
-                )
-                grants += [f"{row[0]}: SEQUENCE {row[1]}" for row in cursor.fetchall()]
+            grants, after = _postgres_grants(cursor, username, grant_sequences)
             connection.commit()
         except BaseException:
             connection.rollback()
             raise
-        return grants
+        return grants, sorted(after - before)
+
+
+def _postgres_grants(
+    cursor: Any, username: str, grant_sequences: bool
+) -> tuple[list[str], set[str]]:
+    """Per-schema grants to report, and per-object grants to diff: drift is per object."""
+    cursor.execute(
+        "SELECT table_schema, table_name, privilege_type"
+        " FROM information_schema.role_table_grants WHERE grantee = %s",
+        (username,),
+    )
+    rows = [(schema, name, privilege) for schema, name, privilege in cursor.fetchall()]
+    if grant_sequences:
+        cursor.execute(
+            "SELECT object_schema, object_name, 'SEQUENCE ' || privilege_type"
+            " FROM information_schema.role_usage_grants"
+            " WHERE grantee = %s AND object_type = 'SEQUENCE'",
+            (username,),
+        )
+        rows += [(schema, name, privilege) for schema, name, privilege in cursor.fetchall()]
+    grants = list(dict.fromkeys(f"{schema}: {privilege}" for schema, _, privilege in rows))
+    return grants, {f"{privilege} ON {schema}.{name}" for schema, name, privilege in rows}
 
 
 def _require_password(group: Group, password: Secret | None) -> None:
@@ -987,7 +1014,7 @@ def _provision_postgres_inherited(
     port: int,
     master: MasterCredential,
     password: Secret | None,
-) -> list[str]:
+) -> tuple[list[str], list[str]]:
     if group.postgres_role is None:
         raise BootstrapError("postgres_role is required for inherited provisioning")
     with pg8000.dbapi.connect(
@@ -1010,6 +1037,14 @@ def _provision_postgres_inherited(
             cursor.execute(
                 f"ALTER ROLE {username} WITH LOGIN INHERIT" + _password_clause(password)
             )
+            cursor.execute(
+                "SELECT inherit_option AND set_option AND NOT admin_option"
+                " FROM pg_catalog.pg_auth_members"
+                " WHERE roleid = (SELECT oid FROM pg_roles WHERE rolname = %s)"
+                " AND member = (SELECT oid FROM pg_roles WHERE rolname = %s)",
+                (group.postgres_role, group.username),
+            )
+            membership_held = (cursor.fetchone() or (False,))[0]
             for option in ("INHERIT TRUE", "SET TRUE", "ADMIN FALSE"):
                 cursor.execute(
                     f"GRANT {_quote_ident(group.postgres_role)} TO {username} WITH {option}"
@@ -1019,7 +1054,8 @@ def _provision_postgres_inherited(
         except BaseException:
             connection.rollback()
             raise
-    return created + [f"ROLE {group.postgres_role}: INHERIT TRUE, SET TRUE, ADMIN FALSE"]
+    membership = f"ROLE {group.postgres_role}: INHERIT TRUE, SET TRUE, ADMIN FALSE"
+    return created + [membership], created + ([] if membership_held else [membership])
 
 
 def _create_postgres_owner(cursor: Any, group: Group) -> list[str]:

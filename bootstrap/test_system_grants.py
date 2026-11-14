@@ -88,7 +88,7 @@ class SystemGrantsTest(unittest.TestCase):
             patch.object(bootstrap.pymysql, "connect", return_value=connection),
             patch.object(bootstrap, "_tls_context", return_value=None),
         ):
-            _, skipped = bootstrap._provision_mysql(
+            _, skipped, _ = bootstrap._provision_mysql(
                 group,
                 "database.invalid",
                 3306,

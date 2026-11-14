@@ -61,7 +61,9 @@ class HandlerRotationTest(unittest.TestCase):
     def invoke(self, event, engine="mysql"):
         group = make_group(engine)
         engine_call = MagicMock(
-            return_value=([], []) if engine == "mysql" else ["app: SELECT"]
+            return_value=(["SELECT ON app"], [], ["SELECT ON app"])
+            if engine == "mysql"
+            else (["app: SELECT"], ["SELECT ON app"])
         )
         publish = MagicMock(return_value=["app-rw"])
         restart = MagicMock(return_value=["proxy-app-rw"])
@@ -89,6 +91,7 @@ class HandlerRotationTest(unittest.TestCase):
                 publish.assert_not_called()
                 restart.assert_not_called()
                 self.assertFalse(result["password_rotated"])
+                self.assertEqual(result["grants_added"], ["SELECT ON app"])
                 self.assertEqual(result["secrets_written"], [])
                 self.assertEqual(result["services_restarted"], [])
 
@@ -101,6 +104,7 @@ class HandlerRotationTest(unittest.TestCase):
                 self.assertIs(publish.call_args.args[1], password)
                 restart.assert_called_once()
                 self.assertTrue(result["password_rotated"])
+                self.assertNotIn("grants_added", result)
                 self.assertEqual(result["secrets_written"], ["app-rw"])
                 self.assertEqual(result["services_restarted"], ["proxy-app-rw"])
 
@@ -127,8 +131,9 @@ class MysqlGrantsTest(unittest.TestCase):
         return statements(cursor), result
 
     def test_grants_reapply_drop_tables_without_setting_a_password(self):
-        sql, (_, skipped) = self.provision(None, tables=["orders__deprecated_1"])
+        sql, (_, skipped, _) = self.provision(None, tables=["orders__deprecated_1"])
         self.assertFalse([s for s in sql if "IDENTIFIED BY" in s])
+        self.assertFalse([s for s in sql if s.startswith("REVOKE")])
         self.assertFalse([s for s in sql if s.startswith("CREATE USER")])
         self.assertIn(
             "GRANT DROP ON `app`.`orders__deprecated_1` TO 'pmproxy_rw'@'10.25.%'", sql
@@ -161,6 +166,12 @@ class MysqlGrantsTest(unittest.TestCase):
         sql, _ = self.provision(bootstrap.Secret("test-password"), user_exists=False)
         self.assertTrue([s for s in sql if s.startswith("CREATE USER IF NOT EXISTS")])
         self.assertTrue([s for s in sql if s.startswith("ALTER USER")])
+        revoke = sql.index(
+            "REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'pmproxy_rw'@'10.25.%'"
+        )
+        self.assertLess(
+            revoke, next(i for i, s in enumerate(sql) if s.startswith("GRANT"))
+        )
 
 
 class PostgresGrantsTest(unittest.TestCase):
@@ -198,6 +209,10 @@ class PostgresGrantsTest(unittest.TestCase):
                 self.assertTrue(alters)
                 self.assertFalse([s for s in alters if "PASSWORD" in s])
                 self.assertFalse([s for s in sql if s.startswith("CREATE ROLE")])
+                self.assertFalse([s for s in alters if "NOCREATEDB" in s])
+                self.assertFalse(
+                    [s for s in sql if s.startswith("REVOKE") and "pmproxy_rw" in s]
+                )
                 self.assertTrue(self.committed)
 
     def test_grants_fail_when_the_role_does_not_exist(self):
