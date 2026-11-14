@@ -96,7 +96,7 @@ class MysqlIntegrationTest(unittest.TestCase):
     def credential_row(self):
         return self.root(
             (
-                "SELECT authentication_string, password_last_changed FROM mysql.user"
+                "SELECT authentication_string FROM mysql.user"
                 " WHERE User = %s",
                 (self.group.username,),
             )
