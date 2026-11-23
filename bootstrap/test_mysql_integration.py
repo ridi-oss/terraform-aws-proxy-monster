@@ -13,6 +13,7 @@ with patch(
     import handler as bootstrap
 
 ROOT_PASSWORD = "local-bootstrap-test"
+DB = f"pmit{uuid.uuid4().hex[:8]}"
 
 
 def insecure_tls(_group=None):
@@ -51,23 +52,34 @@ class MysqlIntegrationTest(unittest.TestCase):
     def setUpClass(cls):
         client = cls.root(("SELECT SUBSTRING_INDEX(USER(), '@', -1)",))[0][0]
         cls.host_pattern = client.split(".")[0] + ".%"
+        cls.log_settings = cls.root(
+            ("SELECT @@GLOBAL.log_output, @@GLOBAL.general_log",)
+        )[0]
         cls.root(
-            ("CREATE DATABASE IF NOT EXISTS app",),
-            ("CREATE TABLE IF NOT EXISTS app.orders (id int)",),
-            ("CREATE TABLE IF NOT EXISTS app.orders__deprecated_1 (id int)",),
+            (f"CREATE DATABASE {DB}",),
+            (f"CREATE TABLE {DB}.orders (id int)",),
+            (f"CREATE TABLE {DB}.orders__deprecated_1 (id int)",),
             ("SET GLOBAL log_output = 'TABLE'",),
             ("SET GLOBAL general_log = 'ON'",),
         )
 
     @classmethod
     def tearDownClass(cls):
-        cls.root(("SET GLOBAL general_log = 'OFF'",))
+        log_output, general_log = cls.log_settings
+        cls.root(
+            ("SET GLOBAL general_log = %s", (general_log,)),
+            ("SET GLOBAL log_output = %s", (log_output,)),
+            (f"DROP DATABASE {DB}",),
+        )
+
+    def tearDown(self):
+        self.root((f"DROP USER IF EXISTS {self.user}",))
 
     def setUp(self):
         self.group = bootstrap.Group(
             engine="mysql",
-            database="app",
-            schemas=["app"],
+            database=DB,
+            schemas=[DB],
             privileges=["SELECT", "INSERT"],
             system_schemas=[],
             system_routines=[],
@@ -76,7 +88,7 @@ class MysqlIntegrationTest(unittest.TestCase):
             host_pattern=self.host_pattern,
             datasources={"app-rw": "127.0.0.1"},
             serving=["app-rw"],
-            drop_tables=["app.*__deprecated*"],
+            drop_tables=[f"{DB}.*__deprecated*"],
         )
         self.user = f"'{self.group.username}'@'{self.host_pattern}'"
 
@@ -96,8 +108,7 @@ class MysqlIntegrationTest(unittest.TestCase):
     def credential_row(self):
         return self.root(
             (
-                "SELECT authentication_string FROM mysql.user"
-                " WHERE User = %s",
+                "SELECT authentication_string FROM mysql.user WHERE User = %s",
                 (self.group.username,),
             )
         )
@@ -118,22 +129,22 @@ class MysqlIntegrationTest(unittest.TestCase):
     def test_provision_creates_a_login_with_table_level_drop(self):
         grants, skipped, _ = self.provision()
         self.assertEqual(skipped, [])
-        self.assertIn("DROP ON app.orders__deprecated_1", grants)
+        self.assertIn(f"DROP ON {DB}.orders__deprecated_1", grants)
         with self.connect(self.group.username, "first-password") as connection:
-            connection.cursor().execute("SELECT 1 FROM app.orders")
+            connection.cursor().execute(f"SELECT 1 FROM {DB}.orders")
 
     def test_grants_picks_up_a_new_table_without_touching_the_password(self):
         self.provision()
         credential = self.credential_row()
         table = f"orders__deprecated_{uuid.uuid4().hex[:8]}"
         self.root(
-            (f"CREATE TABLE app.{table} (id int)",), ("TRUNCATE mysql.general_log",)
+            (f"CREATE TABLE {DB}.{table} (id int)",), ("TRUNCATE mysql.general_log",)
         )
 
         grants, _, added = self.apply(None)
 
-        self.assertEqual(added, [f"DROP ON app.{table}"])
-        self.assertIn(f"DROP ON app.{table}", grants)
+        self.assertEqual(added, [f"DROP ON {DB}.{table}"])
+        self.assertIn(f"DROP ON {DB}.{table}", grants)
         self.assertEqual(self.credential_row(), credential)
         sent = self.logged_statements()
         self.assertTrue([sql for sql in sent if sql.startswith("GRANT DROP")])
@@ -141,38 +152,38 @@ class MysqlIntegrationTest(unittest.TestCase):
             [sql for sql in sent if "IDENTIFIED" in sql or "REVOKE" in sql]
         )
         with self.connect(self.group.username, "first-password") as connection:
-            connection.cursor().execute(f"DROP TABLE app.{table}")
+            connection.cursor().execute(f"DROP TABLE {DB}.{table}")
 
     def test_grants_restores_a_revoked_privilege(self):
         self.provision()
-        self.root((f"REVOKE INSERT ON app.* FROM {self.user}",))
+        self.root((f"REVOKE INSERT ON {DB}.* FROM {self.user}",))
 
         _, _, added = self.apply(None)
 
-        self.assertEqual(added, ["INSERT ON app"])
+        self.assertEqual(added, [f"INSERT ON {DB}"])
         with self.connect(self.group.username, "first-password") as connection:
-            connection.cursor().execute("INSERT INTO app.orders VALUES (1)")
+            connection.cursor().execute(f"INSERT INTO {DB}.orders VALUES (1)")
         self.assertEqual(self.apply(None)[2], [])
 
     def test_grants_keeps_an_extra_privilege_that_provision_removes(self):
         self.provision()
-        self.root((f"GRANT DELETE ON app.* TO {self.user}",))
+        self.root((f"GRANT DELETE ON {DB}.* TO {self.user}",))
 
         grants, _, added = self.apply(None)
-        self.assertIn("DELETE ON app", grants)
+        self.assertIn(f"DELETE ON {DB}", grants)
         self.assertEqual(added, [])
 
         grants, _, _ = self.provision("second-password")
-        self.assertNotIn("DELETE ON app", grants)
+        self.assertNotIn(f"DELETE ON {DB}", grants)
 
     def test_live_connection_keeps_working_across_grants(self):
         self.provision()
         with self.connect(self.group.username, "first-password") as connection:
             cursor = connection.cursor()
-            cursor.execute("SELECT 1 FROM app.orders")
+            cursor.execute(f"SELECT 1 FROM {DB}.orders")
             self.apply(None)
-            cursor.execute("SELECT 1 FROM app.orders")
-            cursor.execute("INSERT INTO app.orders VALUES (2)")
+            cursor.execute(f"SELECT 1 FROM {DB}.orders")
+            cursor.execute(f"INSERT INTO {DB}.orders VALUES (2)")
 
     def test_grants_refuses_a_missing_user_and_creates_nothing(self):
         with self.assertRaisesRegex(bootstrap.BootstrapError, "does not exist"):
@@ -213,7 +224,7 @@ class MysqlIntegrationTest(unittest.TestCase):
         publish.assert_not_called()
         restart.assert_not_called()
         with self.connect(self.group.username, published) as connection:
-            connection.cursor().execute("SELECT 1 FROM app.orders")
+            connection.cursor().execute(f"SELECT 1 FROM {DB}.orders")
 
 
 if __name__ == "__main__":

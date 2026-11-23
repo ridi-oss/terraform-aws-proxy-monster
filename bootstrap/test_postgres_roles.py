@@ -78,6 +78,7 @@ class PostgresRoleIntegrationTest(unittest.TestCase):
                 cursor.execute(f"CREATE ROLE {name} NOLOGIN")
             for name, attribute in (
                 ("bootstrap_master", "CREATEROLE"),
+                ("direct_master", "CREATEROLE CREATEDB"),
                 ("limited_master", "NOCREATEROLE"),
                 ("noadmin_master", "CREATEROLE"),
             ):
@@ -89,6 +90,12 @@ class PostgresRoleIntegrationTest(unittest.TestCase):
             )
             # The RDS master owns the database it creates, so CREATE SCHEMA is its to run.
             cursor.execute("GRANT CREATE ON DATABASE postgres TO bootstrap_master WITH GRANT OPTION")
+            cursor.execute(
+                "GRANT app_owner TO direct_master WITH ADMIN TRUE, INHERIT FALSE, SET FALSE"
+            )
+            cursor.execute(
+                "GRANT CONNECT ON DATABASE postgres TO direct_master WITH GRANT OPTION"
+            )
             cursor.execute("CREATE SCHEMA inherit_test AUTHORIZATION app_owner")
             cursor.execute("SET ROLE app_owner")
             cursor.execute(
@@ -401,7 +408,6 @@ class PostgresRoleIntegrationTest(unittest.TestCase):
             ):
                 bootstrap._inspect_postgres_roles({"group": "test"})
 
-
     def stored_password(self, group):
         return self.query(
             "SELECT rolpassword FROM pg_authid WHERE rolname = %s", (group.username,)
@@ -427,6 +433,9 @@ class PostgresRoleIntegrationTest(unittest.TestCase):
             "CREATE SCHEMA IF NOT EXISTS direct_test AUTHORIZATION app_owner",
             "CREATE TABLE IF NOT EXISTS direct_test.items (id int)",
             "ALTER TABLE direct_test.items OWNER TO app_owner",
+            "CREATE TABLE IF NOT EXISTS direct_test.others (id int)",
+            "ALTER TABLE direct_test.others OWNER TO app_owner",
+            "GRANT USAGE ON SCHEMA direct_test TO direct_master WITH GRANT OPTION",
         )
         return make_group(postgres_role=None, schemas=["direct_test"])
 
@@ -497,6 +506,81 @@ class PostgresRoleIntegrationTest(unittest.TestCase):
         with self.assertRaisesRegex(bootstrap.BootstrapError, "does not exist"):
             self.grants(group, master="postgres")
         self.assert_absent(group)
+
+    def test_direct_grants_report_drift_to_a_master_that_is_not_superuser(self):
+        group = self.direct_group()
+        self.assertIn(
+            "direct_test: SELECT", self.provision(group, master="direct_master")
+        )
+        self.superuser(
+            "REVOKE app_owner FROM direct_master GRANTED BY direct_master",
+            f"REVOKE SELECT ON direct_test.items FROM {group.username}",
+            "ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA direct_test"
+            f" REVOKE SELECT ON TABLES FROM {group.username}",
+        )
+        with self.connect("direct_master") as connection:
+            connection.cursor().execute(
+                f"REVOKE USAGE ON SCHEMA direct_test FROM {group.username}"
+            )
+            connection.commit()
+        self.assertEqual(
+            self.query(
+                "SELECT has_schema_privilege(%s, 'direct_test', 'USAGE')",
+                (group.username,),
+            ),
+            [[False]],
+        )
+
+        grants, added = self.grants(group, master="direct_master")
+
+        self.assertIn("direct_test: SELECT", grants)
+        self.assertEqual(
+            added,
+            [
+                "DEFAULT SELECT ON TABLES FOR app_owner IN direct_test",
+                "SELECT ON direct_test.items",
+                "USAGE ON SCHEMA direct_test",
+            ],
+        )
+        self.assertEqual(self.grants(group, master="direct_master")[1], [])
+
+    def test_grants_leave_a_locked_role_locked(self):
+        for group, master in (
+            (make_group(), "bootstrap_master"),
+            (self.direct_group(), "postgres"),
+        ):
+            with self.subTest(postgres_role=group.postgres_role):
+                self.provision(group, master=master)
+                self.superuser(f"ALTER ROLE {group.username} NOLOGIN")
+                self.grants(group, master=master)
+                self.assertEqual(
+                    self.query(
+                        "SELECT rolcanlogin FROM pg_roles WHERE rolname = %s",
+                        (group.username,),
+                    ),
+                    [[False]],
+                )
+
+    def test_inherited_grants_report_nothing_when_another_grantor_holds_a_weaker_row(
+        self,
+    ):
+        group = make_group()
+        self.provision(group)
+        self.superuser(
+            f"GRANT app_read TO {group.username} WITH INHERIT FALSE, SET FALSE"
+        )
+        self.assertEqual(
+            len(
+                self.query(
+                    "SELECT 1 FROM pg_auth_members"
+                    " WHERE member = (SELECT oid FROM pg_roles WHERE rolname = %s)",
+                    (group.username,),
+                )
+            ),
+            2,
+        )
+        self.assertEqual(self.grants(group)[1], [])
+
 
 if __name__ == "__main__":
     unittest.main()

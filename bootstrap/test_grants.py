@@ -201,15 +201,12 @@ class PostgresGrantsTest(unittest.TestCase):
             "inherited": make_group("postgres", postgres_role="app_read"),
         }
 
-    def test_grants_alter_no_password(self):
+    def test_grants_leave_the_role_its_password_attributes_and_memberships(self):
         for name, group in self.groups().items():
             with self.subTest(path=name):
                 sql = self.provision(group, None)
-                alters = [s for s in sql if s.startswith("ALTER ROLE")]
-                self.assertTrue(alters)
-                self.assertFalse([s for s in alters if "PASSWORD" in s])
+                self.assertFalse([s for s in sql if s.startswith("ALTER ROLE")])
                 self.assertFalse([s for s in sql if s.startswith("CREATE ROLE")])
-                self.assertFalse([s for s in alters if "NOCREATEDB" in s])
                 self.assertFalse(
                     [s for s in sql if s.startswith("REVOKE") and "pmproxy_rw" in s]
                 )

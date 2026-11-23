@@ -161,9 +161,14 @@ unknown `action` is refused:
   connections see no gap. It keeps the password, writes no secret, and restarts
   nothing: the response carries `"password_rotated": false`, empty
   `secrets_written` and `services_restarted`, and `grants_added` listing what
-  the call restored. The account must already exist; otherwise the call fails,
-  and the first run has to be `provision`. To drop a privilege removed from the
-  configuration, run `provision`, which resets the account before granting.
+  the call restored. On PostgreSQL that covers table, sequence, schema,
+  database, and default privileges and the inherited role membership; on MySQL
+  it covers schema, table, and global privileges, but not routine `EXECUTE`.
+  A role attribute such as `NOLOGIN` is left as it is, so `grants` does not
+  unlock a disabled account. The account must already exist; otherwise the
+  call fails, and the first run has to be `provision`. To drop a privilege
+  removed from the configuration, run `provision`, which resets the account
+  before granting.
 - `{"action": "list-users"}`, optionally with `group`: reports the accounts
   each target holds and writes nothing.
 - `{"action": "inspect-postgres-roles", "group": "<name>"}`: reports a

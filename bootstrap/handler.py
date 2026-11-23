@@ -86,6 +86,40 @@ POSTGRES_DATABASE_PRIVILEGES = frozenset({"CONNECT", "CREATE", "TEMPORARY"})
 # Table privileges that imply the group also needs USAGE on the schema's sequences.
 POSTGRES_SEQUENCE_WRITERS = frozenset({"INSERT", "UPDATE"})
 
+POSTGRES_ACCOUNT_GRANTS_SQL = """
+WITH account AS (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = %s)
+SELECT 'relation', n.nspname::text, c.relname::text, c.relkind::text, a.privilege_type
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) a
+WHERE a.grantee = (SELECT oid FROM account)
+UNION ALL
+SELECT 'schema', n.nspname::text, NULL, NULL, a.privilege_type
+FROM pg_catalog.pg_namespace n
+CROSS JOIN LATERAL pg_catalog.aclexplode(n.nspacl) a
+WHERE a.grantee = (SELECT oid FROM account)
+UNION ALL
+SELECT 'database', NULL, d.datname::text, NULL, a.privilege_type
+FROM pg_catalog.pg_database d
+CROSS JOIN LATERAL pg_catalog.aclexplode(d.datacl) a
+WHERE d.datname = current_database() AND a.grantee = (SELECT oid FROM account)
+UNION ALL
+SELECT 'default', n.nspname::text, pg_catalog.pg_get_userbyid(d.defaclrole)::text,
+    d.defaclobjtype::text, a.privilege_type
+FROM pg_catalog.pg_default_acl d
+LEFT JOIN pg_catalog.pg_namespace n ON n.oid = d.defaclnamespace
+CROSS JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) a
+WHERE a.grantee = (SELECT oid FROM account)
+ORDER BY 1, 2, 3, 5
+"""
+POSTGRES_DEFAULT_ACL_OBJECTS = {
+    "r": "TABLES",
+    "S": "SEQUENCES",
+    "f": "FUNCTIONS",
+    "T": "TYPES",
+    "n": "SCHEMAS",
+}
+
 # Whether the master already holds a membership in a role directly, whatever that membership
 # inherits. pg_has_role reads the inherited privilege, which is the narrower question.
 POSTGRES_DIRECT_MEMBERSHIP_SQL = (
@@ -642,8 +676,10 @@ def _provision_mysql(
             cursor.execute(
                 f"ALTER USER {user_escaped} IDENTIFIED BY %s", (password.reveal(),)
             )
-        before = _mysql_grants(cursor, user)
-        if password is not None:
+        if password is None:
+            before = set(_mysql_grants(cursor, user))
+        else:
+            before = None
             cursor.execute(f"REVOKE ALL PRIVILEGES, GRANT OPTION FROM {user}")
         for schema in group.schemas:
             cursor.execute(
@@ -665,7 +701,8 @@ def _provision_mysql(
                 f"GRANT {', '.join(group.global_privileges)} ON *.* TO {user}"
             )
         grants = _mysql_grants(cursor, user)
-        return grants, drop_tables_skipped, sorted(set(grants) - set(before))
+        added = [] if before is None else sorted(set(grants) - before)
+        return grants, drop_tables_skipped, added
 
 
 def _mysql_grants(cursor: Any, user: str) -> list[str]:
@@ -777,10 +814,10 @@ def _provision_postgres(
             if cursor.fetchone() is None:
                 _require_password(group, password)
                 cursor.execute(f'CREATE ROLE "{username}" LOGIN')
-            _, before = _postgres_grants(cursor, username, grant_sequences)
             if password is None:
-                cursor.execute(f'ALTER ROLE "{username}" WITH LOGIN')
+                before = _postgres_grants(cursor, username, grant_sequences)[1]
             else:
+                before = None
                 # SUPERUSER, REPLICATION, and BYPASSRLS need real superuser even to write the NO- form.
                 cursor.execute(
                     f'ALTER ROLE "{username}" WITH LOGIN NOCREATEDB NOCREATEROLE'
@@ -848,29 +885,35 @@ def _provision_postgres(
         except BaseException:
             connection.rollback()
             raise
-        return grants, sorted(after - before)
+        return grants, [] if before is None else sorted(after - before)
 
 
 def _postgres_grants(
     cursor: Any, username: str, grant_sequences: bool
 ) -> tuple[list[str], set[str]]:
-    """Per-schema grants to report, and per-object grants to diff: drift is per object."""
-    cursor.execute(
-        "SELECT table_schema, table_name, privilege_type"
-        " FROM information_schema.role_table_grants WHERE grantee = %s",
-        (username,),
-    )
-    rows = [(schema, name, privilege) for schema, name, privilege in cursor.fetchall()]
-    if grant_sequences:
-        cursor.execute(
-            "SELECT object_schema, object_name, 'SEQUENCE ' || privilege_type"
-            " FROM information_schema.role_usage_grants"
-            " WHERE grantee = %s AND object_type = 'SEQUENCE'",
-            (username,),
-        )
-        rows += [(schema, name, privilege) for schema, name, privilege in cursor.fetchall()]
-    grants = list(dict.fromkeys(f"{schema}: {privilege}" for schema, _, privilege in rows))
-    return grants, {f"{privilege} ON {schema}.{name}" for schema, name, privilege in rows}
+    """Per-schema grants to report, and every grant the account holds directly, to diff."""
+    cursor.execute(POSTGRES_ACCOUNT_GRANTS_SQL, (username,))
+    grants = []
+    held = set()
+    for kind, schema, name, detail, privilege in cursor.fetchall():
+        match kind:
+            case "relation" if detail == "S":
+                if grant_sequences and privilege == "USAGE":
+                    grants.append(f"{schema}: SEQUENCE USAGE")
+                    held.add(f"SEQUENCE USAGE ON {schema}.{name}")
+            case "relation":
+                grants.append(f"{schema}: {privilege}")
+                held.add(f"{privilege} ON {schema}.{name}")
+            case "schema":
+                held.add(f"{privilege} ON SCHEMA {schema}")
+            case "database":
+                held.add(f"{privilege} ON DATABASE {name}")
+            case "default":
+                objects = POSTGRES_DEFAULT_ACL_OBJECTS.get(detail, detail)
+                held.add(
+                    f"DEFAULT {privilege} ON {objects} FOR {name} IN {schema or '*'}"
+                )
+    return list(dict.fromkeys(grants)), held
 
 
 def _require_password(group: Group, password: Secret | None) -> None:
@@ -1034,17 +1077,19 @@ def _provision_postgres_inherited(
             if not exists:
                 _require_password(group, password)
                 cursor.execute(f"CREATE ROLE {username} LOGIN")
+            if password is not None:
+                cursor.execute(
+                    f"ALTER ROLE {username} WITH LOGIN INHERIT"
+                    + _password_clause(password)
+                )
             cursor.execute(
-                f"ALTER ROLE {username} WITH LOGIN INHERIT" + _password_clause(password)
-            )
-            cursor.execute(
-                "SELECT inherit_option AND set_option AND NOT admin_option"
+                "SELECT COALESCE(bool_or(inherit_option) AND bool_or(set_option), false)"
                 " FROM pg_catalog.pg_auth_members"
                 " WHERE roleid = (SELECT oid FROM pg_roles WHERE rolname = %s)"
                 " AND member = (SELECT oid FROM pg_roles WHERE rolname = %s)",
                 (group.postgres_role, group.username),
             )
-            membership_held = (cursor.fetchone() or (False,))[0]
+            membership_held = cursor.fetchone()[0]
             for option in ("INHERIT TRUE", "SET TRUE", "ADMIN FALSE"):
                 cursor.execute(
                     f"GRANT {_quote_ident(group.postgres_role)} TO {username} WITH {option}"
