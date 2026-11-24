@@ -108,6 +108,25 @@ class HandlerRotationTest(unittest.TestCase):
                 self.assertEqual(result["secrets_written"], ["app-rw"])
                 self.assertEqual(result["services_restarted"], ["proxy-app-rw"])
 
+    def test_missing_account_error_reaches_the_caller_unwrapped(self):
+        message = "'pmproxy_rw'@'10.25.%' does not exist; provision the group first"
+        with (
+            patch.dict(bootstrap.CONFIG.groups, {"app": make_group()}),
+            patch.object(
+                bootstrap,
+                "_resolve",
+                return_value=("database.invalid", 3306, {"database.invalid"}, MASTER),
+            ),
+            patch.object(
+                bootstrap,
+                "_provision_mysql",
+                side_effect=bootstrap.BootstrapError(message),
+            ),
+            self.assertRaises(bootstrap.BootstrapError) as failure,
+        ):
+            bootstrap.handler({"action": "grants", "group": "app"}, None)
+        self.assertEqual(str(failure.exception), message)
+
     def test_misspelled_action_is_rejected(self):
         with self.assertRaisesRegex(bootstrap.BootstrapError, "unknown action"):
             bootstrap.handler({"action": "grant", "group": "app"}, None)
@@ -183,7 +202,9 @@ class PostgresGrantsTest(unittest.TestCase):
             patch.object(bootstrap.pg8000.dbapi, "connect", return_value=connection),
             patch.object(bootstrap, "_tls_context", return_value=None),
             patch.object(
-                bootstrap, "_check_postgres_inheritance", return_value=user_exists
+                bootstrap,
+                "_check_postgres_inheritance",
+                return_value=(user_exists, user_exists),
             ),
             patch.object(bootstrap, "_verify_postgres_inherited_access"),
         ):

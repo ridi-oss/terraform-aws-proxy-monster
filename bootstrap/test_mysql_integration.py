@@ -2,6 +2,7 @@ import os
 import ssl
 import unittest
 import uuid
+from dataclasses import replace
 from unittest.mock import MagicMock, mock_open, patch
 
 import pymysql
@@ -59,6 +60,7 @@ class MysqlIntegrationTest(unittest.TestCase):
             (f"CREATE DATABASE {DB}",),
             (f"CREATE TABLE {DB}.orders (id int)",),
             (f"CREATE TABLE {DB}.orders__deprecated_1 (id int)",),
+            (f"CREATE PROCEDURE {DB}.noop() BEGIN END",),
             ("SET GLOBAL log_output = 'TABLE'",),
             ("SET GLOBAL general_log = 'ON'",),
         )
@@ -82,7 +84,7 @@ class MysqlIntegrationTest(unittest.TestCase):
             schemas=[DB],
             privileges=["SELECT", "INSERT"],
             system_schemas=[],
-            system_routines=[],
+            system_routines=[f"{DB}.noop"],
             global_privileges=[],
             username=f"pm_{uuid.uuid4().hex[:12]}",
             host_pattern=self.host_pattern,
@@ -165,6 +167,16 @@ class MysqlIntegrationTest(unittest.TestCase):
             connection.cursor().execute(f"INSERT INTO {DB}.orders VALUES (1)")
         self.assertEqual(self.apply(None)[2], [])
 
+    def test_grants_restores_and_reports_a_revoked_routine_execute(self):
+        self.assertIn(f"EXECUTE ON PROCEDURE {DB}.noop", self.provision()[0])
+        self.root((f"REVOKE EXECUTE ON PROCEDURE {DB}.noop FROM {self.user}",))
+
+        _, _, added = self.apply(None)
+
+        self.assertEqual(added, [f"EXECUTE ON PROCEDURE {DB}.noop"])
+        with self.connect(self.group.username, "first-password") as connection:
+            connection.cursor().execute(f"CALL {DB}.noop()")
+
     def test_grants_keeps_an_extra_privilege_that_provision_removes(self):
         self.provision()
         self.root((f"GRANT DELETE ON {DB}.* TO {self.user}",))
@@ -195,7 +207,10 @@ class MysqlIntegrationTest(unittest.TestCase):
         restart = MagicMock(return_value=["proxy-app-rw"])
         master = bootstrap.MasterCredential("root", bootstrap.Secret(ROOT_PASSWORD))
         with (
-            patch.dict(bootstrap.CONFIG.groups, {"it": self.group}),
+            patch.dict(
+                bootstrap.CONFIG.groups,
+                {"it": replace(self.group, system_routines=[])},
+            ),
             patch.object(
                 bootstrap,
                 "_resolve",

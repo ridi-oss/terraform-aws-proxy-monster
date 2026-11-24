@@ -231,10 +231,7 @@ def handler(event: dict[str, Any] | None, _context: object) -> dict[str, Any]:
 
 
 def _provision(event: dict[str, Any], *, rotate: bool) -> dict[str, Any]:
-    """Re-apply the group's grants; with rotate, also set, publish, and roll out a new password.
-
-    Without rotate the account must already exist: creating it would leave it with no password.
-    """
+    """Re-apply the group's grants; with rotate, also set, publish, and roll out a new password."""
     group_name = event.get("group", "")
     group = _group(group_name)
 
@@ -264,9 +261,14 @@ def _provision(event: dict[str, Any], *, rotate: bool) -> dict[str, Any]:
             case engine:
                 raise BootstrapError(f"unknown engine {engine!r}")
     except Exception as exc:  # noqa: BLE001
+        message = (
+            str(exc)
+            if isinstance(exc, BootstrapError)
+            else f"{type(exc).__name__}: {exc}"
+        )
         raise BootstrapError(
             _scrub(
-                f"{type(exc).__name__}: {exc}",
+                message,
                 (master.password.reveal(), password.reveal() if password else ""),
             )
         ) from None
@@ -668,7 +670,9 @@ def _provision_mysql(
                 raise BootstrapError(
                     f"{user} does not exist; provision the group before re-granting it"
                 )
+            before = set(_mysql_grants(cursor, group))
         else:
+            before = None
             cursor.execute(
                 f"CREATE USER IF NOT EXISTS {user_escaped} IDENTIFIED BY %s",
                 (password.reveal(),),
@@ -676,10 +680,6 @@ def _provision_mysql(
             cursor.execute(
                 f"ALTER USER {user_escaped} IDENTIFIED BY %s", (password.reveal(),)
             )
-        if password is None:
-            before = set(_mysql_grants(cursor, user))
-        else:
-            before = None
             cursor.execute(f"REVOKE ALL PRIVILEGES, GRANT OPTION FROM {user}")
         for schema in group.schemas:
             cursor.execute(
@@ -700,12 +700,13 @@ def _provision_mysql(
             cursor.execute(
                 f"GRANT {', '.join(group.global_privileges)} ON *.* TO {user}"
             )
-        grants = _mysql_grants(cursor, user)
+        grants = _mysql_grants(cursor, group)
         added = [] if before is None else sorted(set(grants) - before)
         return grants, drop_tables_skipped, added
 
 
-def _mysql_grants(cursor: Any, user: str) -> list[str]:
+def _mysql_grants(cursor: Any, group: Group) -> list[str]:
+    user = f"'{group.username}'@'{group.host_pattern}'"
     # Not SHOW GRANTS: MariaDB still emits "IDENTIFIED VIA ... USING '*<hash>'" there.
     cursor.execute(
         "SELECT PRIVILEGE_TYPE, TABLE_SCHEMA, IS_GRANTABLE"
@@ -733,6 +734,20 @@ def _mysql_grants(cursor: Any, user: str) -> list[str]:
         (user,),
     )
     grants += [f"{row[0]} ON *.*" for row in cursor.fetchall()]
+    if group.system_routines:
+        cursor.execute(
+            "SELECT Db, Routine_name, Proc_priv FROM mysql.procs_priv"
+            " WHERE User = %s AND Host = %s AND Routine_type = 'PROCEDURE'"
+            " ORDER BY Db, Routine_name",
+            (group.username, group.host_pattern),
+        )
+        grants += [
+            f"{'GRANT OPTION' if privilege == 'Grant' else privilege.upper()}"
+            f" ON PROCEDURE {schema}.{name}"
+            for schema, name, privileges in cursor.fetchall()
+            for privilege in sorted(privileges.split(","))
+            if privilege
+        ]
     return grants
 
 
@@ -923,8 +938,8 @@ def _require_password(group: Group, password: Secret | None) -> None:
         )
 
 
-def _password_clause(password: Secret | None) -> str:
-    return "" if password is None else f" PASSWORD '{_scram_verifier(password)}'"
+def _password_clause(password: Secret) -> str:
+    return f" PASSWORD '{_scram_verifier(password)}'"
 
 
 def _postgres_role_state(cursor: Any) -> dict[str, Any]:
@@ -975,7 +990,8 @@ def _inspect_postgres_roles(event: dict[str, Any]) -> dict[str, Any]:
     return {"action": "inspect-postgres-roles", "group": group_name, **state}
 
 
-def _check_postgres_inheritance(cursor: Any, group: Group) -> bool:
+def _check_postgres_inheritance(cursor: Any, group: Group) -> tuple[bool, bool]:
+    """Whether the account exists, and whether it holds postgres_role with INHERIT and SET."""
     state = _postgres_role_state(cursor)
     roles = {role["rolname"]: role for role in state["roles"]}
     parent = roles.get(group.postgres_role)
@@ -1006,7 +1022,15 @@ def _check_postgres_inheritance(cursor: Any, group: Group) -> bool:
         raise BootstrapError(
             "master needs CREATEROLE to manage the proxy login; role inheritance does not supply it"
         )
-    return group.username in roles
+    held = [
+        membership
+        for membership in state["memberships"]
+        if membership["member"] == group.username
+        and membership["role"] == group.postgres_role
+    ]
+    return group.username in roles, any(m["inherit_option"] for m in held) and any(
+        m["set_option"] for m in held
+    )
 
 
 def _verify_postgres_inherited_access(cursor: Any, group: Group) -> None:
@@ -1072,7 +1096,7 @@ def _provision_postgres_inherited(
         cursor = connection.cursor()
         try:
             created = _create_postgres_owner(cursor, group) if group.postgres_role_create else []
-            exists = _check_postgres_inheritance(cursor, group)
+            exists, membership_held = _check_postgres_inheritance(cursor, group)
             username = _quote_ident(group.username)
             if not exists:
                 _require_password(group, password)
@@ -1082,14 +1106,6 @@ def _provision_postgres_inherited(
                     f"ALTER ROLE {username} WITH LOGIN INHERIT"
                     + _password_clause(password)
                 )
-            cursor.execute(
-                "SELECT COALESCE(bool_or(inherit_option) AND bool_or(set_option), false)"
-                " FROM pg_catalog.pg_auth_members"
-                " WHERE roleid = (SELECT oid FROM pg_roles WHERE rolname = %s)"
-                " AND member = (SELECT oid FROM pg_roles WHERE rolname = %s)",
-                (group.postgres_role, group.username),
-            )
-            membership_held = cursor.fetchone()[0]
             for option in ("INHERIT TRUE", "SET TRUE", "ADMIN FALSE"):
                 cursor.execute(
                     f"GRANT {_quote_ident(group.postgres_role)} TO {username} WITH {option}"

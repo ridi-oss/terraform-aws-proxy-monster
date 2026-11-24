@@ -461,6 +461,16 @@ class PostgresRoleIntegrationTest(unittest.TestCase):
         self.assertEqual(self.memberships(group), [["app_read"]])
         self.assertEqual(self.grants(group)[1], [])
 
+    def test_inherited_grants_refuse_an_extra_membership_like_provision(self):
+        group = make_group()
+        self.provision(group)
+        self.superuser(f"GRANT ungranted_role TO {group.username}")
+        with self.assertRaisesRegex(
+            bootstrap.BootstrapError, "unexpected role membership"
+        ):
+            self.grants(group)
+        self.assertEqual(self.memberships(group), [["app_read"], ["ungranted_role"]])
+
     def test_inherited_grants_refuse_a_missing_role(self):
         group = make_group()
         with self.assertRaisesRegex(bootstrap.BootstrapError, "does not exist"):
