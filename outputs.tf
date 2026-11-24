@@ -14,7 +14,7 @@ output "aurora_cluster_endpoint" {
 }
 
 output "bootstrap_function_name" {
-  description = "Lambda that provisions the backend DB accounts. Invoke it per group: {\"group\": \"<name>\"}."
+  description = "Lambda that provisions the backend DB accounts. Invoke it per group: {\"group\": \"<name>\"} rotates and redeploys; {\"action\": \"grants\", \"group\": \"<name>\"} re-applies grants only."
   value       = try(module.bootstrap[0].lambda_function_name, null)
 }
 

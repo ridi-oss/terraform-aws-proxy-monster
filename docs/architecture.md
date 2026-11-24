@@ -147,6 +147,36 @@ For an RDS-backed `target_credential_groups` entry:
    encrypted with the target-credentials key. The master password never enters
    Terraform state.
 
+The Lambda takes one event per group. `action` defaults to `provision`, and an
+unknown `action` is refused:
+
+- `{"group": "<name>"}` or `{"action": "provision", "group": "<name>"}`:
+  creates the account if needed, sets a new password, re-applies the grants,
+  writes the password into each datasource's secret, and redeploys the
+  group's running proxies. Every wire client of the group reconnects.
+- `{"action": "grants", "group": "<name>"}`: issues the group's grants again,
+  including a fresh `drop_tables` expansion, and revokes nothing. A grant that
+  drifted away comes back, and a grant beyond the configuration stays. Live
+  connections see no gap. It keeps the password, writes no secret, and restarts
+  nothing: the response carries `"password_rotated": false`, empty
+  `secrets_written` and `services_restarted`, and `grants_added` listing what
+  the call restored. On PostgreSQL that covers table, sequence, schema,
+  database, and default privileges and the inherited role membership; on MySQL
+  it covers schema, table, global, and routine privileges.
+  A role attribute such as `NOLOGIN` is left as it is, so `grants` does not
+  unlock a disabled account. Without `postgres_role`, an extra PostgreSQL role
+  attribute or membership stays too. With `postgres_role`, `grants` runs the
+  same checks as `provision` first, and refuses an account that holds a
+  privileged attribute or a membership other than `postgres_role`, without
+  changing anything. The account must already exist; otherwise the
+  call fails, and the first run has to be `provision`. To drop a privilege
+  removed from the configuration, run `provision`, which resets the account
+  before granting.
+- `{"action": "list-users"}`, optionally with `group`: reports the accounts
+  each target holds and writes nothing.
+- `{"action": "inspect-postgres-roles", "group": "<name>"}`: reports a
+  PostgreSQL target's roles and memberships in a read-only transaction.
+
 When the cluster and the credential group live in the same root,
 `rds_identifier` must be a literal: the KMS key this module creates encrypts
 the cluster's master secret, so a reference closes a cycle.
